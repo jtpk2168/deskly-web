@@ -1,5 +1,5 @@
-import Link from 'next/link';
-import styles from './admin.module.css';
+import { Sidebar } from '@/components/admin/Sidebar';
+import { TopNav } from '@/components/admin/TopNav';
 
 export default function AdminLayout({
     children,
@@ -7,19 +7,14 @@ export default function AdminLayout({
     children: React.ReactNode;
 }) {
     return (
-        <div className={styles.container}>
-            <aside className={styles.sidebar}>
-                <div className={styles.sidebarHeader}>Deskly Admin</div>
-                <nav className={styles.nav}>
-                    <Link href="/admin" className={styles.navLink}>Dashboard</Link>
-                    <Link href="/admin/reels" className={styles.navLink}>Reels</Link>
-                    <Link href="/admin/products" className={styles.navLink}>Products</Link>
-                    <Link href="/admin/bundles" className={styles.navLink}>Bundles</Link>
-                </nav>
-            </aside>
-            <main className={styles.main}>
-                {children}
-            </main>
+        <div className="flex h-screen bg-background-light">
+            <Sidebar />
+            <div className="flex flex-1 flex-col overflow-hidden">
+                <TopNav />
+                <main className="flex-1 overflow-y-auto p-6">
+                    {children}
+                </main>
+            </div>
         </div>
     );
 }
