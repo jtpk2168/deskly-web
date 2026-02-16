@@ -2,8 +2,25 @@ import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../../../lib/apiResponse'
 import { isValidHttpUrl, normalizeCategory, normalizeStatus } from '@/lib/products'
+import { ResolvedProductPricing, resolveProductPricing } from '@/lib/productPricing'
+import { toProductResponse } from '@/lib/productResponse'
 
 type RouteParams = { params: Promise<{ id: string }> }
+const PRODUCT_SELECT = '*, product_pricing_tiers(id, min_months, monthly_price)'
+
+async function getProductWithTiers(productId: string) {
+    const { data, error } = await supabaseServer
+        .from('products')
+        .select(PRODUCT_SELECT)
+        .eq('id', productId)
+        .single()
+
+    if (error || !data) {
+        throw new Error(error?.message ?? 'Product not found')
+    }
+
+    return data
+}
 
 /** GET /api/admin/products/:id — Get one product for edit */
 export async function GET(_request: NextRequest, { params }: RouteParams) {
@@ -12,14 +29,12 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
         const uuid = parseUUID(id)
         if (!uuid) return errorResponse('Invalid product ID format', 400)
 
-        const { data, error } = await supabaseServer
-            .from('products')
-            .select('*')
-            .eq('id', uuid)
-            .single()
-
-        if (error || !data) return errorResponse('Product not found', 404)
-        return successResponse(data)
+        try {
+            const product = await getProductWithTiers(uuid)
+            return successResponse(toProductResponse(product))
+        } catch {
+            return errorResponse('Product not found', 404)
+        }
     } catch {
         return errorResponse('Internal server error', 500)
     }
@@ -39,13 +54,14 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 
         const { data: existing, error: existingError } = await supabaseServer
             .from('products')
-            .select('id, published_at')
+            .select('id, published_at, monthly_price, pricing_mode, product_pricing_tiers(min_months, monthly_price)')
             .eq('id', uuid)
             .single()
 
         if (existingError || !existing) return errorResponse('Product not found', 404)
 
         const updates: Record<string, unknown> = {}
+        let resolvedPricing: ResolvedProductPricing | null = null
 
         if (body?.name !== undefined) {
             const name = String(body.name ?? '').trim()
@@ -64,12 +80,25 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
             updates.category = category
         }
 
-        if (body?.monthly_price !== undefined) {
-            const monthlyPrice = Number(body.monthly_price)
-            if (!Number.isFinite(monthlyPrice) || monthlyPrice <= 0) {
-                return errorResponse('monthly_price must be a positive number', 400)
+        const hasPricingUpdate =
+            body?.monthly_price !== undefined ||
+            body?.pricing_mode !== undefined ||
+            body?.pricing_tiers !== undefined
+
+        if (hasPricingUpdate) {
+            const pricing = resolveProductPricing({
+                monthlyPrice: body?.monthly_price ?? existing.monthly_price,
+                pricingMode: body?.pricing_mode ?? existing.pricing_mode ?? 'fixed',
+                pricingTiers: body?.pricing_tiers ?? existing.product_pricing_tiers ?? [],
+            })
+
+            if (!pricing.value) {
+                return errorResponse(pricing.error, 400)
             }
-            updates.monthly_price = monthlyPrice
+
+            updates.monthly_price = pricing.value.monthlyPrice
+            updates.pricing_mode = pricing.value.pricingMode
+            resolvedPricing = pricing.value
         }
 
         if (body?.stock_quantity !== undefined) {
@@ -112,11 +141,45 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
             .from('products')
             .update(updates)
             .eq('id', uuid)
-            .select('*')
+            .select('id')
             .single()
 
         if (error || !data) return errorResponse('Product not found or update failed', 404)
-        return successResponse(data)
+
+        if (resolvedPricing) {
+            const { error: deleteTiersError } = await supabaseServer
+                .from('product_pricing_tiers')
+                .delete()
+                .eq('product_id', uuid)
+
+            if (deleteTiersError) {
+                return errorResponse(deleteTiersError.message, 500)
+            }
+
+            if (resolvedPricing.pricingMode === 'tiered' && resolvedPricing.pricingTiers.length > 0) {
+                const { error: insertTiersError } = await supabaseServer
+                    .from('product_pricing_tiers')
+                    .insert(
+                        resolvedPricing.pricingTiers.map((tier) => ({
+                            product_id: uuid,
+                            min_months: tier.min_months,
+                            monthly_price: tier.monthly_price,
+                        }))
+                    )
+
+                if (insertTiersError) {
+                    return errorResponse(insertTiersError.message, 500)
+                }
+            }
+        }
+
+        try {
+            const product = await getProductWithTiers(uuid)
+            return successResponse(toProductResponse(product))
+        } catch (loadError) {
+            const message = loadError instanceof Error ? loadError.message : 'Failed to load updated product'
+            return errorResponse(message, 500)
+        }
     } catch {
         return errorResponse('Invalid request body', 400)
     }

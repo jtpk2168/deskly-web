@@ -4,6 +4,10 @@ import { successResponse, errorResponse } from '../../../../../lib/apiResponse'
 import { applyAdminProductFilters, parseAdminProductFilters } from '@/lib/adminProducts'
 import { isValidHttpUrl, normalizeCategory, normalizeStatus, resolveCategoryCode } from '@/lib/products'
 import { parsePaginationParams } from '@/lib/pagination'
+import { resolveProductPricing } from '@/lib/productPricing'
+import { toProductResponse, toProductResponseList } from '@/lib/productResponse'
+
+const PRODUCT_SELECT = '*, product_pricing_tiers(id, min_months, monthly_price)'
 
 function isMissingGenerateCodeFunctionError(error: { message?: string } | null) {
     const message = error?.message?.toLowerCase() ?? ''
@@ -55,6 +59,20 @@ async function allocateProductCode(categoryCode: string) {
     return getNextProductCodeFallback(categoryCode)
 }
 
+async function getProductWithTiers(productId: string) {
+    const { data, error } = await supabaseServer
+        .from('products')
+        .select(PRODUCT_SELECT)
+        .eq('id', productId)
+        .single()
+
+    if (error || !data) {
+        throw new Error(error?.message ?? 'Failed to load created product')
+    }
+
+    return data
+}
+
 /** GET /api/admin/products — List products for admin with search/sort/filters */
 export async function GET(request: NextRequest) {
     try {
@@ -62,12 +80,12 @@ export async function GET(request: NextRequest) {
         const filters = parseAdminProductFilters(searchParams)
         const { page, limit, from, to } = parsePaginationParams(searchParams)
 
-        const baseQuery = supabaseServer.from('products').select('*', { count: 'exact' })
+        const baseQuery = supabaseServer.from('products').select(PRODUCT_SELECT, { count: 'exact' })
         const query = applyAdminProductFilters(baseQuery, filters).range(from, to)
         const { data, error, count } = await query
 
         if (error) return errorResponse(error.message, 500)
-        return successResponse(data ?? [], 200, {
+        return successResponse(toProductResponseList(data ?? []), 200, {
             page,
             limit,
             total: count ?? 0,
@@ -88,7 +106,11 @@ export async function POST(request: NextRequest) {
         const categoryCode = resolveCategoryCode(category)
         const status = normalizeStatus(body?.status) ?? 'draft'
 
-        const monthlyPrice = Number(body?.monthly_price)
+        const pricing = resolveProductPricing({
+            monthlyPrice: body?.monthly_price,
+            pricingMode: body?.pricing_mode,
+            pricingTiers: body?.pricing_tiers,
+        })
         const stockQuantity = Number(body?.stock_quantity ?? 0)
         const imageUrl = body?.image_url ? String(body.image_url).trim() : null
         const videoUrl = body?.video_url ? String(body.video_url).trim() : null
@@ -101,8 +123,8 @@ export async function POST(request: NextRequest) {
             return errorResponse('category is invalid', 400)
         }
 
-        if (!Number.isFinite(monthlyPrice) || monthlyPrice <= 0) {
-            return errorResponse('monthly_price must be a positive number', 400)
+        if (!pricing.value) {
+            return errorResponse(pricing.error, 400)
         }
 
         if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
@@ -131,7 +153,8 @@ export async function POST(request: NextRequest) {
                     name,
                     description: description || null,
                     category,
-                    monthly_price: monthlyPrice,
+                    monthly_price: pricing.value.monthlyPrice,
+                    pricing_mode: pricing.value.pricingMode,
                     image_url: imageUrl,
                     video_url: videoUrl,
                     stock_quantity: stockQuantity,
@@ -140,10 +163,37 @@ export async function POST(request: NextRequest) {
                     updated_at: now,
                     published_at: status === 'active' ? now : null,
                 })
-                .select('*')
+                .select('id')
                 .single()
 
-            if (!error && data) return successResponse(data, 201)
+            if (!error && data) {
+                const productId = String(data.id)
+
+                if (pricing.value.pricingMode === 'tiered' && pricing.value.pricingTiers.length > 0) {
+                    const { error: tiersError } = await supabaseServer
+                        .from('product_pricing_tiers')
+                        .insert(
+                            pricing.value.pricingTiers.map((tier) => ({
+                                product_id: productId,
+                                min_months: tier.min_months,
+                                monthly_price: tier.monthly_price,
+                            }))
+                        )
+
+                    if (tiersError) {
+                        await supabaseServer.from('products').delete().eq('id', productId)
+                        return errorResponse(tiersError.message, 500)
+                    }
+                }
+
+                try {
+                    const created = await getProductWithTiers(productId)
+                    return successResponse(toProductResponse(created), 201)
+                } catch (loadError) {
+                    const message = loadError instanceof Error ? loadError.message : 'Failed to load created product'
+                    return errorResponse(message, 500)
+                }
+            }
             if (!isDuplicateProductCodeError(error)) {
                 return errorResponse(error?.message ?? 'Failed to create product', 500)
             }

@@ -1,4 +1,9 @@
 export type ProductStatus = 'draft' | 'active' | 'inactive'
+export type ProductPricingMode = 'fixed' | 'tiered'
+export type ProductPricingTier = {
+    min_months: number
+    monthly_price: number
+}
 export type PaginationQuery = { page?: number; limit?: number }
 export type PaginatedResult<T> = {
     items: T[]
@@ -14,6 +19,8 @@ export type AdminProduct = {
     description: string | null
     category: string | null
     monthly_price: number
+    pricing_mode: ProductPricingMode
+    pricing_tiers: ProductPricingTier[]
     image_url: string | null
     video_url: string | null
     stock_quantity: number
@@ -60,6 +67,8 @@ export type ProductUpsertPayload = {
     description?: string | null
     category: string
     monthly_price: number
+    pricing_mode: ProductPricingMode
+    pricing_tiers?: ProductPricingTier[]
     stock_quantity: number
     image_url?: string | null
     video_url?: string | null

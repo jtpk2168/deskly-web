@@ -3,6 +3,8 @@ export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number]
 
 export const PRODUCT_STATUSES = ['draft', 'active', 'inactive'] as const
 export type ProductStatus = (typeof PRODUCT_STATUSES)[number]
+export const PRODUCT_PRICING_MODES = ['fixed', 'tiered'] as const
+export type ProductPricingMode = (typeof PRODUCT_PRICING_MODES)[number]
 
 const CATEGORY_ALIASES: Record<string, ProductCategory> = {
     chair: 'Chairs',
@@ -44,6 +46,13 @@ export function normalizeStatus(input: string | null | undefined): ProductStatus
     const key = (input ?? '').trim().toLowerCase()
     if (!key) return null
     if (PRODUCT_STATUSES.includes(key as ProductStatus)) return key as ProductStatus
+    return null
+}
+
+export function normalizePricingMode(input: string | null | undefined): ProductPricingMode | null {
+    const key = (input ?? '').trim().toLowerCase()
+    if (!key) return null
+    if (PRODUCT_PRICING_MODES.includes(key as ProductPricingMode)) return key as ProductPricingMode
     return null
 }
 

@@ -2,6 +2,9 @@ import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../lib/supabaseServer'
 import { successResponse, errorResponse } from '../../../../lib/apiResponse'
 import { normalizeCategory } from '@/lib/products'
+import { toProductResponseList } from '@/lib/productResponse'
+
+const PRODUCT_SELECT = '*, product_pricing_tiers(id, min_months, monthly_price)'
 
 /** GET /api/products — List active products with optional filters */
 export async function GET(request: NextRequest) {
@@ -12,7 +15,7 @@ export async function GET(request: NextRequest) {
 
         let query = supabaseServer
             .from('products')
-            .select('*')
+            .select(PRODUCT_SELECT)
             .eq('status', 'active')
             .order('created_at', { ascending: false })
 
@@ -27,7 +30,7 @@ export async function GET(request: NextRequest) {
         const { data, error } = await query
 
         if (error) return errorResponse(error.message, 500)
-        return successResponse(data)
+        return successResponse(toProductResponseList(data ?? []))
     } catch {
         return errorResponse('Internal server error', 500)
     }

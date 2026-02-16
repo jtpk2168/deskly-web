@@ -3,6 +3,7 @@ import { supabaseServer } from '../../../../../../lib/supabaseServer'
 import { errorResponse, successResponse } from '../../../../../../lib/apiResponse'
 import { parseCsv } from '@/lib/csv'
 import { isValidHttpUrl, normalizeCategory, resolveCategoryCode } from '@/lib/products'
+import { ProductPricingTier, resolveProductPricing } from '@/lib/productPricing'
 
 const REQUIRED_HEADERS = ['name', 'category', 'monthly_price', 'stock_quantity']
 
@@ -12,9 +13,18 @@ type ImportRow = {
     category: string
     categoryCode: string
     monthlyPrice: number
+    pricingMode: 'fixed' | 'tiered'
+    pricingTiers: ProductPricingTier[]
     stockQuantity: number
     imageUrl: string | null
     videoUrl: string | null
+}
+
+type PreparedInsertRow = {
+    productCode: string
+    productInsert: Record<string, unknown>
+    pricingMode: 'fixed' | 'tiered'
+    pricingTiers: ProductPricingTier[]
 }
 
 function isMissingGenerateCodeFunctionError(error: { message?: string } | null) {
@@ -39,6 +49,35 @@ function formatProductCode(categoryCode: string, nextValue: number) {
     return `${categoryCode}-${String(nextValue).padStart(6, '0')}`
 }
 
+function parsePricingTiersCell(rawValue: string): { value: ProductPricingTier[]; error: string | null } {
+    const trimmed = rawValue.trim()
+    if (!trimmed) return { value: [], error: null }
+
+    const pairs = trimmed.split('|')
+    const parsed: ProductPricingTier[] = []
+
+    for (const pair of pairs) {
+        const [minMonthsRaw, monthlyPriceRaw] = pair.split(':').map((segment) => segment.trim())
+
+        const minMonths = Number(minMonthsRaw)
+        const monthlyPrice = Number(monthlyPriceRaw)
+
+        if (!Number.isInteger(minMonths) || minMonths < 2 || !Number.isFinite(monthlyPrice) || monthlyPrice <= 0) {
+            return {
+                value: [],
+                error: 'pricing_tiers must use format "min_months:monthly_price|min_months:monthly_price", e.g. "6:80|12:75"',
+            }
+        }
+
+        parsed.push({
+            min_months: minMonths,
+            monthly_price: monthlyPrice,
+        })
+    }
+
+    return { value: parsed, error: null }
+}
+
 async function getMaxCodeByCategory(categoryCode: string) {
     const { data, error } = await supabaseServer
         .from('products')
@@ -56,7 +95,7 @@ async function getMaxCodeByCategory(categoryCode: string) {
 async function buildRowsWithCodes(importRows: ImportRow[]) {
     let shouldUseFallback = false
     const fallbackCounters = new Map<string, number>()
-    const rowsWithCodes: Array<Record<string, unknown>> = []
+    const rowsWithCodes: PreparedInsertRow[] = []
 
     for (const row of importRows) {
         let productCode = ''
@@ -86,18 +125,24 @@ async function buildRowsWithCodes(importRows: ImportRow[]) {
         }
 
         rowsWithCodes.push({
-            product_code: productCode,
-            name: row.name,
-            description: row.description,
-            category: row.category,
-            monthly_price: row.monthlyPrice,
-            image_url: row.imageUrl,
-            video_url: row.videoUrl,
-            stock_quantity: row.stockQuantity,
-            status: 'draft',
-            is_active: false,
-            updated_at: new Date().toISOString(),
-            published_at: null,
+            productCode,
+            pricingMode: row.pricingMode,
+            pricingTiers: row.pricingTiers,
+            productInsert: {
+                product_code: productCode,
+                name: row.name,
+                description: row.description,
+                category: row.category,
+                monthly_price: row.monthlyPrice,
+                pricing_mode: row.pricingMode,
+                image_url: row.imageUrl,
+                video_url: row.videoUrl,
+                stock_quantity: row.stockQuantity,
+                status: 'draft',
+                is_active: false,
+                updated_at: new Date().toISOString(),
+                published_at: null,
+            },
         })
     }
 
@@ -150,6 +195,7 @@ export async function POST(request: NextRequest) {
         for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
             const row = rows[rowIndex]
             const lineNumber = rowIndex + 1
+            const rowErrors: string[] = []
 
             const name = getColumnValue(row, headers, 'name')
             const categoryInput = getColumnValue(row, headers, 'category')
@@ -157,43 +203,60 @@ export async function POST(request: NextRequest) {
             const categoryCode = resolveCategoryCode(category)
             const monthlyPriceRaw = getColumnValue(row, headers, 'monthly_price')
             const stockQuantityRaw = getColumnValue(row, headers, 'stock_quantity')
+            const pricingModeRaw = getColumnValue(row, headers, 'pricing_mode')
+            const pricingTiersRaw = getColumnValue(row, headers, 'pricing_tiers')
             const descriptionRaw = getColumnValue(row, headers, 'description')
             const imageUrlRaw = getColumnValue(row, headers, 'image_url')
             const videoUrlRaw = getColumnValue(row, headers, 'video_url')
 
-            if (!name) errors.push(`Row ${lineNumber}: name is required`)
-            if (!category || !categoryCode) errors.push(`Row ${lineNumber}: category is invalid`)
+            if (!name) rowErrors.push(`Row ${lineNumber}: name is required`)
+            if (!category || !categoryCode) rowErrors.push(`Row ${lineNumber}: category is invalid`)
 
-            const monthlyPrice = Number(monthlyPriceRaw)
-            if (!Number.isFinite(monthlyPrice) || monthlyPrice <= 0) {
-                errors.push(`Row ${lineNumber}: monthly_price must be a positive number`)
+            const parsedPricingTiers = parsePricingTiersCell(pricingTiersRaw)
+            if (parsedPricingTiers.error) {
+                rowErrors.push(`Row ${lineNumber}: ${parsedPricingTiers.error}`)
+            }
+
+            const pricing = resolveProductPricing({
+                monthlyPrice: monthlyPriceRaw,
+                pricingMode: pricingModeRaw || 'fixed',
+                pricingTiers: parsedPricingTiers.value,
+            })
+
+            if (!pricing.value) {
+                rowErrors.push(`Row ${lineNumber}: ${pricing.error}`)
             }
 
             const stockQuantity = Number(stockQuantityRaw)
             if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
-                errors.push(`Row ${lineNumber}: stock_quantity must be an integer greater than or equal to 0`)
+                rowErrors.push(`Row ${lineNumber}: stock_quantity must be an integer greater than or equal to 0`)
             }
 
             if (imageUrlRaw && !isValidHttpUrl(imageUrlRaw)) {
-                errors.push(`Row ${lineNumber}: image_url must be a valid HTTP(S) URL`)
+                rowErrors.push(`Row ${lineNumber}: image_url must be a valid HTTP(S) URL`)
             }
 
             if (videoUrlRaw && !isValidHttpUrl(videoUrlRaw)) {
-                errors.push(`Row ${lineNumber}: video_url must be a valid HTTP(S) URL`)
+                rowErrors.push(`Row ${lineNumber}: video_url must be a valid HTTP(S) URL`)
             }
 
-            if (errors.length === 0 || !errors.some((error) => error.startsWith(`Row ${lineNumber}:`))) {
-                importRows.push({
-                    name,
-                    description: descriptionRaw || null,
-                    category: category as string,
-                    categoryCode: categoryCode as string,
-                    monthlyPrice,
-                    stockQuantity,
-                    imageUrl: imageUrlRaw || null,
-                    videoUrl: videoUrlRaw || null,
-                })
+            if (rowErrors.length > 0 || !pricing.value) {
+                errors.push(...rowErrors)
+                continue
             }
+
+            importRows.push({
+                name,
+                description: descriptionRaw || null,
+                category: category as string,
+                categoryCode: categoryCode as string,
+                monthlyPrice: pricing.value.monthlyPrice,
+                pricingMode: pricing.value.pricingMode,
+                pricingTiers: pricing.value.pricingTiers,
+                stockQuantity,
+                imageUrl: imageUrlRaw || null,
+                videoUrl: videoUrlRaw || null,
+            })
         }
 
         if (errors.length > 0) {
@@ -204,7 +267,7 @@ export async function POST(request: NextRequest) {
         }
 
         for (let attempt = 0; attempt < 3; attempt += 1) {
-            let rowsWithCodes: Array<Record<string, unknown>> = []
+            let rowsWithCodes: PreparedInsertRow[] = []
             try {
                 rowsWithCodes = await buildRowsWithCodes(importRows)
             } catch (error) {
@@ -214,10 +277,47 @@ export async function POST(request: NextRequest) {
 
             const { data, error } = await supabaseServer
                 .from('products')
-                .insert(rowsWithCodes)
-                .select('*')
+                .insert(rowsWithCodes.map((row) => row.productInsert))
+                .select('id, product_code')
 
-            if (!error) return successResponse({ imported: data?.length ?? 0 }, 201)
+            if (!error && data) {
+                const productIdByCode = new Map<string, string>()
+                for (const product of data) {
+                    productIdByCode.set(String(product.product_code), String(product.id))
+                }
+
+                const tierRows: Array<Record<string, unknown>> = []
+                for (const row of rowsWithCodes) {
+                    if (row.pricingMode !== 'tiered' || row.pricingTiers.length === 0) continue
+                    const productId = productIdByCode.get(row.productCode)
+                    if (!productId) continue
+
+                    for (const tier of row.pricingTiers) {
+                        tierRows.push({
+                            product_id: productId,
+                            min_months: tier.min_months,
+                            monthly_price: tier.monthly_price,
+                        })
+                    }
+                }
+
+                if (tierRows.length > 0) {
+                    const { error: tiersError } = await supabaseServer
+                        .from('product_pricing_tiers')
+                        .insert(tierRows)
+
+                    if (tiersError) {
+                        await supabaseServer
+                            .from('products')
+                            .delete()
+                            .in('id', data.map((product) => String(product.id)))
+                        return errorResponse(tiersError.message, 500)
+                    }
+                }
+
+                return successResponse({ imported: data.length }, 201)
+            }
+
             if (!isDuplicateProductCodeError(error)) return errorResponse(error.message, 500)
         }
 

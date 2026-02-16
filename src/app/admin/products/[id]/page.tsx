@@ -1,18 +1,25 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowLeft, Power, Save, Upload } from 'lucide-react'
+import { ArrowLeft, Plus, Power, Save, Trash2, Upload } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import { ChangeEvent, useEffect, useState } from 'react'
-import { AdminProduct, getAdminProduct, updateAdminProduct, uploadProductMedia } from '@/lib/api'
+import { AdminProduct, ProductPricingMode, getAdminProduct, updateAdminProduct, uploadProductMedia } from '@/lib/api'
 import { Badge } from '@/components/ui/Badge'
 import { PRODUCT_CATEGORIES } from '@/lib/products'
 import { ProductMediaPreview } from '@/components/admin/ProductMediaPreview'
+
+type PricingTierFormState = {
+    min_months: string
+    monthly_price: string
+}
 
 type FormState = {
     name: string
     category: string
     monthly_price: string
+    pricing_mode: ProductPricingMode
+    pricing_tiers: PricingTierFormState[]
     stock_quantity: string
     image_url: string
     video_url: string
@@ -30,6 +37,15 @@ function mapProductToForm(product: AdminProduct): FormState {
         name: product.name ?? '',
         category: product.category ?? '',
         monthly_price: String(product.monthly_price ?? ''),
+        pricing_mode: product.pricing_mode ?? 'fixed',
+        pricing_tiers: product.pricing_tiers?.length
+            ? [...product.pricing_tiers]
+                .sort((a, b) => a.min_months - b.min_months)
+                .map((tier) => ({
+                    min_months: String(tier.min_months),
+                    monthly_price: String(tier.monthly_price),
+                }))
+            : [{ min_months: '', monthly_price: '' }],
         stock_quantity: String(product.stock_quantity ?? 0),
         image_url: product.image_url ?? '',
         video_url: product.video_url ?? '',
@@ -73,6 +89,38 @@ export default function EditProductPage() {
         setFormData((prev) => (prev ? { ...prev, [id]: value } : prev))
     }
 
+    const handleTierChange = (index: number, field: keyof PricingTierFormState, value: string) => {
+        setFormData((prev) => {
+            if (!prev) return prev
+            return {
+                ...prev,
+                pricing_tiers: prev.pricing_tiers.map((tier, tierIndex) => (
+                    tierIndex === index ? { ...tier, [field]: value } : tier
+                )),
+            }
+        })
+    }
+
+    const addPricingTier = () => {
+        setFormData((prev) => {
+            if (!prev) return prev
+            return {
+                ...prev,
+                pricing_tiers: [...prev.pricing_tiers, { min_months: '', monthly_price: '' }],
+            }
+        })
+    }
+
+    const removePricingTier = (index: number) => {
+        setFormData((prev) => {
+            if (!prev) return prev
+            return {
+                ...prev,
+                pricing_tiers: prev.pricing_tiers.filter((_, tierIndex) => tierIndex !== index),
+            }
+        })
+    }
+
     const handleMediaUpload = async (mediaType: 'image' | 'video', event: ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0]
         if (!file || !formData) return
@@ -99,11 +147,20 @@ export default function EditProductPage() {
         if (!productId || !formData) return
         setSaving(true)
         try {
+            const pricingTiers = formData.pricing_tiers
+                .filter((tier) => tier.min_months.trim() !== '' || tier.monthly_price.trim() !== '')
+                .map((tier) => ({
+                    min_months: Number(tier.min_months),
+                    monthly_price: Number(tier.monthly_price),
+                }))
+
             const updated = await updateAdminProduct(productId, {
                 name: formData.name,
                 description: formData.description || null,
                 category: formData.category,
                 monthly_price: Number(formData.monthly_price),
+                pricing_mode: formData.pricing_mode,
+                pricing_tiers: formData.pricing_mode === 'tiered' ? pricingTiers : [],
                 stock_quantity: Number(formData.stock_quantity || 0),
                 image_url: formData.image_url || null,
                 video_url: formData.video_url || null,
@@ -193,7 +250,7 @@ export default function EditProductPage() {
                         </select>
                     </div>
                     <div>
-                        <label htmlFor="monthly_price" className="block text-sm font-medium text-text-light mb-1">Price (RM)</label>
+                        <label htmlFor="monthly_price" className="block text-sm font-medium text-text-light mb-1">Base Monthly Price (RM)</label>
                         <input
                             type="number"
                             id="monthly_price"
@@ -205,6 +262,70 @@ export default function EditProductPage() {
                         />
                     </div>
                 </div>
+
+                <div>
+                    <label htmlFor="pricing_mode" className="block text-sm font-medium text-text-light mb-1">Pricing Mode</label>
+                    <select
+                        id="pricing_mode"
+                        value={formData.pricing_mode}
+                        onChange={handleChange}
+                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light bg-white"
+                    >
+                        <option value="fixed">Fixed monthly pricing</option>
+                        <option value="tiered">Tiered monthly pricing</option>
+                    </select>
+                    <p className="mt-1 text-xs text-subtext-light">
+                        Fixed: same monthly price for all durations. Tiered: add multiple discounts by minimum rental months.
+                    </p>
+                </div>
+
+                {formData.pricing_mode === 'tiered' && (
+                    <div className="space-y-3 rounded-md border border-gray-200 bg-gray-50 p-4">
+                        <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-semibold text-text-light">Pricing Tiers</p>
+                            <button
+                                type="button"
+                                onClick={addPricingTier}
+                                className="inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-text-light hover:bg-gray-100"
+                            >
+                                <Plus className="h-3.5 w-3.5" />
+                                Add Tier
+                            </button>
+                        </div>
+
+                        {formData.pricing_tiers.map((tier, index) => (
+                            <div key={`tier-${index}`} className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_auto]">
+                                <input
+                                    type="number"
+                                    min="2"
+                                    step="1"
+                                    value={tier.min_months}
+                                    onChange={(event) => handleTierChange(index, 'min_months', event.target.value)}
+                                    className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-text-light"
+                                    placeholder="Min months (e.g. 6)"
+                                />
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={tier.monthly_price}
+                                    onChange={(event) => handleTierChange(index, 'monthly_price', event.target.value)}
+                                    className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-text-light"
+                                    placeholder="Monthly price (RM)"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => removePricingTier(index)}
+                                    disabled={formData.pricing_tiers.length <= 1}
+                                    className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-text-light hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                    aria-label={`Delete tier ${index + 1}`}
+                                >
+                                    <Trash2 className="h-4 w-4" />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
 
                 <div>
                     <label htmlFor="stock_quantity" className="block text-sm font-medium text-text-light mb-1">Stock Quantity</label>
@@ -257,8 +378,8 @@ export default function EditProductPage() {
                             type="text"
                             id="image_url"
                             value={formData.image_url}
-                            onChange={handleChange}
-                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light"
+                            readOnly
+                            className="w-full rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-text-light cursor-not-allowed"
                         />
                     </div>
                     <div>
@@ -267,8 +388,8 @@ export default function EditProductPage() {
                             type="text"
                             id="video_url"
                             value={formData.video_url}
-                            onChange={handleChange}
-                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light"
+                            readOnly
+                            className="w-full rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-text-light cursor-not-allowed"
                         />
                     </div>
                 </div>

@@ -16,9 +16,46 @@ import {
 } from '@/lib/api'
 import { PRODUCT_CATEGORIES } from '@/lib/products'
 
+const PRODUCT_IMPORT_TEMPLATE_HEADERS = [
+    'name',
+    'description',
+    'category',
+    'monthly_price',
+    'pricing_mode',
+    'pricing_tiers',
+    'stock_quantity',
+    'image_url',
+    'video_url',
+]
+
+const PRODUCT_IMPORT_TEMPLATE_EXAMPLE = [
+    'Ergonomic Chair Pro',
+    'High-back ergonomic office chair with lumbar support',
+    'Chairs',
+    '90',
+    'tiered',
+    '6:80|12:75',
+    '25',
+    'https://example.com/chair.jpg',
+    'https://example.com/chair.mp4',
+]
+
 function toOptionalValue(input: string) {
     const trimmed = input.trim()
     return trimmed.length > 0 ? trimmed : undefined
+}
+
+function csvEscapeCell(cell: string) {
+    const escaped = cell.replace(/"/g, '""')
+    if (/[",\n]/.test(cell)) return `"${escaped}"`
+    return escaped
+}
+
+function buildTemplateCsv() {
+    const rows = [PRODUCT_IMPORT_TEMPLATE_HEADERS, PRODUCT_IMPORT_TEMPLATE_EXAMPLE]
+    return rows
+        .map((row) => row.map((cell) => csvEscapeCell(cell)).join(','))
+        .join('\n')
 }
 
 export default function ProductsPage() {
@@ -32,6 +69,7 @@ export default function ProductsPage() {
     const [csvModalMode, setCsvModalMode] = useState<'import' | 'export' | null>(null)
     const [selectedCsvFile, setSelectedCsvFile] = useState<File | null>(null)
     const [csvModalError, setCsvModalError] = useState<string | null>(null)
+    const [csvImportRowErrors, setCsvImportRowErrors] = useState<string[]>([])
     const [isCsvDragOver, setIsCsvDragOver] = useState(false)
 
     const [search, setSearch] = useState('')
@@ -151,15 +189,31 @@ export default function ProductsPage() {
         const validType = file.name.toLowerCase().endsWith('.csv') || file.type.toLowerCase().includes('csv')
         if (!validType) {
             setCsvModalError('Please upload a valid CSV file.')
+            setCsvImportRowErrors([])
             return
         }
         setSelectedCsvFile(file)
         setCsvModalError(null)
+        setCsvImportRowErrors([])
+    }
+
+    const handleDownloadImportTemplate = () => {
+        const templateCsv = buildTemplateCsv()
+        const blob = new Blob([templateCsv], { type: 'text/csv;charset=utf-8;' })
+        const url = URL.createObjectURL(blob)
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download = 'products-import-template.csv'
+        document.body.appendChild(anchor)
+        anchor.click()
+        document.body.removeChild(anchor)
+        URL.revokeObjectURL(url)
     }
 
     const handleImportCsv = async () => {
         if (!selectedCsvFile) {
             setCsvModalError('Please select a CSV file to import.')
+            setCsvImportRowErrors([])
             return
         }
 
@@ -169,10 +223,23 @@ export default function ProductsPage() {
             alert(`Imported ${result.imported} products as draft.`)
             setSelectedCsvFile(null)
             setCsvModalError(null)
+            setCsvImportRowErrors([])
             setCsvModalMode(null)
             await loadProducts()
         } catch (importError) {
-            alert(importError instanceof Error ? importError.message : 'Import failed')
+            const message = importError instanceof Error ? importError.message : 'Import failed'
+            const details = message
+                .split('\n')
+                .map((line) => line.trim())
+                .filter((line) => line.length > 0)
+
+            if (details.some((line) => line.startsWith('Row '))) {
+                setCsvModalError('Import failed. Please fix the rows below and try again.')
+                setCsvImportRowErrors(details)
+            } else {
+                setCsvModalError(message)
+                setCsvImportRowErrors([])
+            }
         } finally {
             setSubmitting(false)
             if (csvUploadInputRef.current) {
@@ -184,6 +251,7 @@ export default function ProductsPage() {
     const openCsvModal = (mode: 'import' | 'export') => {
         setCsvModalMode(mode)
         setCsvModalError(null)
+        setCsvImportRowErrors([])
         setIsCsvDragOver(false)
         if (mode === 'import') {
             setSelectedCsvFile(null)
@@ -193,6 +261,7 @@ export default function ProductsPage() {
     const closeCsvModal = () => {
         setCsvModalMode(null)
         setCsvModalError(null)
+        setCsvImportRowErrors([])
         setIsCsvDragOver(false)
         if (csvUploadInputRef.current) {
             csvUploadInputRef.current.value = ''
@@ -373,7 +442,17 @@ export default function ProductsPage() {
                                         </td>
                                         <td className="px-4 py-3 text-sm text-text-light">{product.name}</td>
                                         <td className="px-4 py-3 text-sm text-text-light">{product.category ?? '-'}</td>
-                                        <td className="px-4 py-3 text-sm text-text-light">RM {Number(product.monthly_price).toFixed(2)}</td>
+                                        <td className="px-4 py-3 text-sm text-text-light">
+                                            <p>RM {Number(product.monthly_price).toFixed(2)}</p>
+                                            {product.pricing_mode === 'tiered' && Array.isArray(product.pricing_tiers) && product.pricing_tiers.length > 0 && (
+                                                <p className="text-xs text-subtext-light">
+                                                    {product.pricing_tiers.length} tier(s): {[...product.pricing_tiers]
+                                                        .sort((a, b) => a.min_months - b.min_months)
+                                                        .map((tier) => `${tier.min_months}+m RM ${Number(tier.monthly_price).toFixed(2)}`)
+                                                        .join(', ')}
+                                                </p>
+                                            )}
+                                        </td>
                                         <td className="px-4 py-3 text-sm text-text-light">{product.stock_quantity}</td>
                                         <td className="px-4 py-3 text-sm">
                                             <Badge variant={getStatusVariant(product.status)}>
@@ -434,18 +513,30 @@ export default function ProductsPage() {
                                 <h2 className="text-xl font-bold text-text-light">
                                     {csvModalMode === 'import' ? 'Import Products CSV' : 'Export Products CSV'}
                                 </h2>
-                                <p className="mt-1 text-sm text-subtext-light">
+                                <div className="mt-1 text-sm text-subtext-light">
                                     {csvModalMode === 'import' ? (
-                                        <>
-                                            CSV template columns: <span className="font-medium text-text-light">name, description, category, monthly_price, stock_quantity, image_url, video_url</span>.
-                                            {' '}All imported products are saved as <span className="font-medium text-text-light">draft</span>.
-                                        </>
+                                        <div className="space-y-1">
+                                            <p>Upload a CSV file to create products in bulk.</p>
+                                            <p>
+                                                Required columns: <span className="font-medium text-text-light">name, category, monthly_price, stock_quantity</span>.
+                                            </p>
+                                            <p>
+                                                Optional columns: <span className="font-medium text-text-light">description, pricing_mode, pricing_tiers, image_url, video_url</span>.
+                                            </p>
+                                            <p>
+                                                Use <span className="font-medium text-text-light">pricing_mode</span> as <span className="font-medium text-text-light">fixed</span> or <span className="font-medium text-text-light">tiered</span>.
+                                            </p>
+                                            <p>
+                                                For tiered pricing, use <span className="font-medium text-text-light">pricing_tiers</span> format like <span className="font-medium text-text-light">6:80|12:75</span> (meaning <span className="font-medium text-text-light">6:80</span> = 6+ months at RM80/month, <span className="font-medium text-text-light">12:75</span> = 12+ months at RM75/month).
+                                            </p>
+                                            <p>All imported products are saved as <span className="font-medium text-text-light">draft</span>.</p>
+                                        </div>
                                     ) : (
                                         <>
-                                            Export columns: <span className="font-medium text-text-light">product_code, name, description, category, monthly_price, stock_quantity, status, created_at, updated_at</span>.
+                                            Export columns: <span className="font-medium text-text-light">product_code, name, description, category, monthly_price, pricing_mode, pricing_tiers, stock_quantity, status, created_at, updated_at</span>.
                                         </>
                                     )}
-                                </p>
+                                </div>
                             </div>
                             <button
                                 type="button"
@@ -459,6 +550,18 @@ export default function ProductsPage() {
 
                         {csvModalMode === 'import' ? (
                             <div className="space-y-4">
+                                <div className="flex justify-start">
+                                    <button
+                                        type="button"
+                                        onClick={handleDownloadImportTemplate}
+                                        disabled={submitting}
+                                        className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-text-light hover:bg-gray-50 disabled:opacity-50"
+                                    >
+                                        <Download className="h-4 w-4" />
+                                        Download CSV Template
+                                    </button>
+                                </div>
+
                                 <input
                                     ref={csvUploadInputRef}
                                     type="file"
@@ -505,6 +608,22 @@ export default function ProductsPage() {
                                 {csvModalError && (
                                     <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                                         {csvModalError}
+                                    </div>
+                                )}
+
+                                {csvImportRowErrors.length > 0 && (
+                                    <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                                        <p className="font-medium">CSV validation details</p>
+                                        <div className="mt-2 max-h-44 overflow-y-auto space-y-1">
+                                            {csvImportRowErrors.slice(0, 30).map((line) => (
+                                                <p key={line}>{line}</p>
+                                            ))}
+                                        </div>
+                                        {csvImportRowErrors.length > 30 && (
+                                            <p className="mt-2 text-xs">
+                                                Showing first 30 errors. Fix these first, then re-import.
+                                            </p>
+                                        )}
                                     </div>
                                 )}
 

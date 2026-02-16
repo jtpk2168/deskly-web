@@ -1,8 +1,10 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../../lib/apiResponse'
+import { toProductResponse } from '@/lib/productResponse'
 
 type RouteParams = { params: Promise<{ id: string }> }
+const PRODUCT_SELECT = '*, product_pricing_tiers(id, min_months, monthly_price)'
 
 /** GET /api/products/:id — Get a single product */
 export async function GET(_request: NextRequest, { params }: RouteParams) {
@@ -13,13 +15,13 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
 
         const { data, error } = await supabaseServer
             .from('products')
-            .select('*')
+            .select(PRODUCT_SELECT)
             .eq('id', uuid)
             .eq('status', 'active')
             .single()
 
         if (error || !data) return errorResponse('Product not found', 404)
-        return successResponse(data)
+        return successResponse(toProductResponse(data))
     } catch {
         return errorResponse('Internal server error', 500)
     }
