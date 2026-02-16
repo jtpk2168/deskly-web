@@ -1,11 +1,24 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../lib/supabaseServer'
 import { successResponse, errorResponse } from '../../../../lib/apiResponse'
+import { parsePaginationParams, paginateArray } from '@/lib/pagination'
+import { fetchAllAuthUsers } from '@/lib/authAdminUsers'
+
+type AdminRecord = {
+    id: string
+    name: string
+    email: string
+    role: 'Admin'
+    joinedDate: string
+}
 
 /** GET /api/admins — List all ADMIN users */
 export async function GET(request: NextRequest) {
     try {
-        const { data: authData, error: authError } = await supabaseServer.auth.admin.listUsers();
+        const { searchParams } = new URL(request.url)
+        const { page, limit } = parsePaginationParams(searchParams)
+
+        const { users: authUsers, error: authError } = await fetchAllAuthUsers();
         if (authError) return errorResponse(authError.message, 500);
 
         const { data: profileData, error: profileError } = await supabaseServer
@@ -16,20 +29,26 @@ export async function GET(request: NextRequest) {
 
         const profilesMap = new Map(profileData?.map(p => [p.id, p]) || []);
 
-        const admins = authData.users
+        const admins = authUsers
             .filter(user => user.app_metadata?.role === 'admin')
             .map((user) => {
-                const profile: any = profilesMap.get(user.id);
+                const profile = profilesMap.get(user.id);
                 return {
                     id: user.id,
                     name: profile?.full_name || user.user_metadata?.full_name || 'N/A',
                     email: user.email || 'No Email',
-                    role: 'Admin',
+                    role: 'Admin' as const,
                     joinedDate: new Date(user.created_at).toLocaleDateString(),
                 };
             });
 
-        return successResponse(admins);
+        const paginatedAdmins = paginateArray(admins, page, limit)
+
+        return successResponse(paginatedAdmins as AdminRecord[], 200, {
+            page,
+            limit,
+            total: admins.length,
+        });
     } catch (err) {
         console.error('API Error (Admins):', err);
         return errorResponse('Internal server error', 500)

@@ -1,36 +1,57 @@
-'use client';
+'use client'
 
-import { DataTable } from '@/components/ui/DataTable';
-import { Badge } from '@/components/ui/Badge';
-import { getCustomers, deleteCustomer } from '@/lib/api';
-import { MoreHorizontal, Trash } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { Trash } from 'lucide-react'
+import { DataTable } from '@/components/ui/DataTable'
+import { Badge } from '@/components/ui/Badge'
+import { PaginationControls } from '@/components/ui/PaginationControls'
+import { AdminUser, deleteCustomer, getCustomers } from '@/lib/api'
+
+function getRoleVariant(role: AdminUser['role']): 'default' | 'success' | 'warning' | 'error' | 'outline' {
+    return role === 'Admin' ? 'default' : 'outline'
+}
 
 export default function CustomersPage() {
-    const [users, setUsers] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [users, setUsers] = useState<AdminUser[]>([])
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
+    const [page, setPage] = useState(1)
+    const [limit, setLimit] = useState(10)
+    const [total, setTotal] = useState(0)
 
-    async function loadData() {
-        const data = await getCustomers();
-        setUsers(data);
-        setLoading(false);
-    }
+    const loadData = useCallback(async () => {
+        setLoading(true)
+        setError(null)
+        try {
+            const result = await getCustomers({ page, limit })
+            setUsers(result.items)
+            setTotal(result.total)
+        } catch (loadError) {
+            setError(loadError instanceof Error ? loadError.message : 'Failed to load customers')
+        } finally {
+            setLoading(false)
+        }
+    }, [page, limit])
 
     useEffect(() => {
-        loadData();
-    }, []);
+        loadData()
+    }, [loadData])
 
     const handleDelete = async (userId: string) => {
-        if (!confirm('Are you sure you want to delete this customer?')) return;
+        if (!confirm('Are you sure you want to delete this customer?')) return
         try {
-            await deleteCustomer(userId);
-            loadData(); // Refresh list
-        } catch (error: any) {
-            alert(error.message);
+            await deleteCustomer(userId)
+            await loadData()
+        } catch (deleteError) {
+            alert(deleteError instanceof Error ? deleteError.message : 'Failed to delete customer')
         }
-    };
+    }
 
-    const columns = [
+    const columns: Array<{
+        header: string
+        accessorKey?: keyof AdminUser
+        cell?: (row: AdminUser) => ReactNode
+    }> = [
         { header: 'User ID', accessorKey: 'id' },
         { header: 'Name', accessorKey: 'name' },
         { header: 'Email', accessorKey: 'email' },
@@ -38,16 +59,11 @@ export default function CustomersPage() {
         {
             header: 'Role',
             accessorKey: 'role',
-            cell: (row: any) => {
-                let variant = 'default';
-                if (row.role === 'Admin') variant = 'default';
-                if (row.role === 'Customer') variant = 'outline';
-                return <Badge variant={variant as any}>{row.role}</Badge>;
-            },
+            cell: (row) => <Badge variant={getRoleVariant(row.role)}>{row.role}</Badge>,
         },
-    ];
+    ]
 
-    const actions = (row: any) => (
+    const actions = (row: AdminUser) => (
         <div className="flex justify-end gap-2">
             <button
                 onClick={() => handleDelete(row.id)}
@@ -57,7 +73,7 @@ export default function CustomersPage() {
                 <Trash className="h-4 w-4" />
             </button>
         </div>
-    );
+    )
 
     return (
         <div>
@@ -70,13 +86,30 @@ export default function CustomersPage() {
 
             {loading ? (
                 <div className="text-center py-10">Loading users...</div>
+            ) : error ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                    {error}
+                </div>
             ) : (
-                <DataTable
-                    columns={columns as any}
-                    data={users}
-                    actions={actions}
-                />
+                <>
+                    <DataTable
+                        columns={columns}
+                        data={users}
+                        actions={actions}
+                    />
+                    <PaginationControls
+                        page={page}
+                        limit={limit}
+                        total={total}
+                        loading={loading}
+                        onPageChange={setPage}
+                        onLimitChange={(nextLimit) => {
+                            setLimit(nextLimit)
+                            setPage(1)
+                        }}
+                    />
+                </>
             )}
         </div>
-    );
+    )
 }

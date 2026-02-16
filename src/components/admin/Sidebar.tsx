@@ -7,7 +7,6 @@ import {
     Package,
     ShoppingCart,
     Users,
-    Clapperboard,
     Settings,
     LogOut
 } from 'lucide-react';
@@ -18,7 +17,6 @@ const menuItems = [
     { name: 'Orders', href: '/admin/orders', icon: ShoppingCart },
     { name: 'Customers', href: '/admin/customers', icon: Users },
     { name: 'Admins', href: '/admin/admins', icon: Users },
-    { name: 'Reels', href: '/admin/reels', icon: Clapperboard },
     { name: 'Settings', href: '/admin/settings', icon: Settings },
 ];
 

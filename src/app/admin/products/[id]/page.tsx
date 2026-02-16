@@ -1,10 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowLeft, Save, Upload } from 'lucide-react'
-import { useRouter } from 'next/navigation'
-import { ChangeEvent, useState } from 'react'
-import { createAdminProduct, uploadProductMedia } from '@/lib/api'
+import { ArrowLeft, Power, Save, Upload } from 'lucide-react'
+import { useParams, useRouter } from 'next/navigation'
+import { ChangeEvent, useEffect, useState } from 'react'
+import { AdminProduct, getAdminProduct, updateAdminProduct, uploadProductMedia } from '@/lib/api'
+import { Badge } from '@/components/ui/Badge'
 import { PRODUCT_CATEGORIES } from '@/lib/products'
 import { ProductMediaPreview } from '@/components/admin/ProductMediaPreview'
 
@@ -18,44 +19,73 @@ type FormState = {
     description: string
 }
 
-const initialFormState: FormState = {
-    name: '',
-    category: '',
-    monthly_price: '',
-    stock_quantity: '',
-    image_url: '',
-    video_url: '',
-    description: '',
+function getStatusVariant(status: 'draft' | 'active' | 'inactive') {
+    if (status === 'active') return 'success'
+    if (status === 'inactive') return 'error'
+    return 'outline'
 }
 
-export default function NewProductPage() {
+function mapProductToForm(product: AdminProduct): FormState {
+    return {
+        name: product.name ?? '',
+        category: product.category ?? '',
+        monthly_price: String(product.monthly_price ?? ''),
+        stock_quantity: String(product.stock_quantity ?? 0),
+        image_url: product.image_url ?? '',
+        video_url: product.video_url ?? '',
+        description: product.description ?? '',
+    }
+}
+
+export default function EditProductPage() {
     const router = useRouter()
-    const [formData, setFormData] = useState<FormState>(initialFormState)
+    const params = useParams<{ id: string }>()
+    const productId = params?.id
+
+    const [product, setProduct] = useState<AdminProduct | null>(null)
+    const [formData, setFormData] = useState<FormState | null>(null)
+    const [loading, setLoading] = useState(true)
     const [saving, setSaving] = useState(false)
     const [uploadingImage, setUploadingImage] = useState(false)
     const [uploadingVideo, setUploadingVideo] = useState(false)
 
+    useEffect(() => {
+        async function loadProduct() {
+            if (!productId) return
+            setLoading(true)
+            try {
+                const data = await getAdminProduct(productId)
+                setProduct(data)
+                setFormData(mapProductToForm(data))
+            } catch (error) {
+                alert(error instanceof Error ? error.message : 'Failed to load product')
+                router.push('/admin/products')
+            } finally {
+                setLoading(false)
+            }
+        }
+
+        loadProduct()
+    }, [productId, router])
+
     const handleChange = (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
         const { id, value } = event.target
-        setFormData((prev) => ({
-            ...prev,
-            [id]: value,
-        }))
+        setFormData((prev) => (prev ? { ...prev, [id]: value } : prev))
     }
 
     const handleMediaUpload = async (mediaType: 'image' | 'video', event: ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0]
-        if (!file) return
+        if (!file || !formData) return
 
         if (mediaType === 'image') setUploadingImage(true)
         if (mediaType === 'video') setUploadingVideo(true)
 
         try {
             const url = await uploadProductMedia(file, mediaType)
-            setFormData((prev) => ({
-                ...prev,
-                [mediaType === 'image' ? 'image_url' : 'video_url']: url,
-            }))
+            setFormData((prev) => (prev
+                ? { ...prev, [mediaType === 'image' ? 'image_url' : 'video_url']: url }
+                : prev
+            ))
         } catch (error) {
             alert(error instanceof Error ? error.message : 'Upload failed')
         } finally {
@@ -66,9 +96,10 @@ export default function NewProductPage() {
     }
 
     const handleSubmit = async (status: 'draft' | 'active') => {
+        if (!productId || !formData) return
         setSaving(true)
         try {
-            await createAdminProduct({
+            const updated = await updateAdminProduct(productId, {
                 name: formData.name,
                 description: formData.description || null,
                 category: formData.category,
@@ -78,12 +109,33 @@ export default function NewProductPage() {
                 video_url: formData.video_url || null,
                 status,
             })
-            router.push('/admin/products')
+            setProduct(updated)
+            setFormData(mapProductToForm(updated))
+            alert('Product updated successfully')
         } catch (error) {
-            alert(error instanceof Error ? error.message : 'Failed to save product')
+            alert(error instanceof Error ? error.message : 'Failed to update product')
         } finally {
             setSaving(false)
         }
+    }
+
+    const handleToggleActivation = async () => {
+        if (!productId || !product) return
+        setSaving(true)
+        const nextStatus = product.status === 'active' ? 'inactive' : 'active'
+        try {
+            const updated = await updateAdminProduct(productId, { status: nextStatus })
+            setProduct(updated)
+            setFormData(mapProductToForm(updated))
+        } catch (error) {
+            alert(error instanceof Error ? error.message : 'Failed to update product status')
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    if (loading || !formData || !product) {
+        return <div className="py-10 text-center text-subtext-light">Loading product...</div>
     }
 
     return (
@@ -92,10 +144,20 @@ export default function NewProductPage() {
                 <Link href="/admin/products" className="text-subtext-light hover:text-text-light transition-colors">
                     <ArrowLeft className="h-5 w-5" />
                 </Link>
-                <h1 className="text-2xl font-bold text-text-light">Add New Product</h1>
+                <h1 className="text-2xl font-bold text-text-light">Edit Product</h1>
             </div>
 
             <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6 space-y-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-gray-200 bg-gray-50 px-4 py-3">
+                    <div>
+                        <p className="text-xs font-medium uppercase text-subtext-light">Product ID</p>
+                        <p className="text-sm font-semibold text-text-light">{product.product_code}</p>
+                    </div>
+                    <Badge variant={getStatusVariant(product.status)}>
+                        {product.status}
+                    </Badge>
+                </div>
+
                 <div className="rounded-md border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
                     <p className="font-semibold">Media Guidelines</p>
                     <p className="mt-1">Images: JPG/PNG/WebP, up to 5MB.</p>
@@ -110,7 +172,6 @@ export default function NewProductPage() {
                         value={formData.name}
                         onChange={handleChange}
                         className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light"
-                        placeholder="e.g. Ergonomic Chair"
                     />
                 </div>
 
@@ -141,7 +202,6 @@ export default function NewProductPage() {
                             value={formData.monthly_price}
                             onChange={handleChange}
                             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light"
-                            placeholder="0.00"
                         />
                     </div>
                 </div>
@@ -156,7 +216,6 @@ export default function NewProductPage() {
                         value={formData.stock_quantity}
                         onChange={handleChange}
                         className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light"
-                        placeholder="0"
                     />
                 </div>
 
@@ -200,7 +259,6 @@ export default function NewProductPage() {
                             value={formData.image_url}
                             onChange={handleChange}
                             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light"
-                            placeholder="https://..."
                         />
                     </div>
                     <div>
@@ -211,7 +269,6 @@ export default function NewProductPage() {
                             value={formData.video_url}
                             onChange={handleChange}
                             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light"
-                            placeholder="https://..."
                         />
                     </div>
                 </div>
@@ -226,29 +283,40 @@ export default function NewProductPage() {
                         onChange={handleChange}
                         rows={4}
                         className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light"
-                        placeholder="Product description..."
                     />
                 </div>
 
-                <div className="flex flex-wrap justify-end gap-2 pt-4 border-t border-gray-100">
+                <div className="flex flex-wrap justify-between gap-2 pt-4 border-t border-gray-100">
                     <button
                         type="button"
-                        onClick={() => handleSubmit('draft')}
+                        onClick={handleToggleActivation}
                         disabled={saving || uploadingImage || uploadingVideo}
                         className="flex items-center gap-2 rounded-md border border-gray-300 bg-white px-5 py-2 text-sm font-medium text-text-light hover:bg-gray-50 disabled:opacity-50"
                     >
-                        <Save className="h-4 w-4" />
-                        Save Draft
+                        <Power className="h-4 w-4" />
+                        {product.status === 'active' ? 'Deactivate Product' : 'Activate Product'}
                     </button>
-                    <button
-                        type="button"
-                        onClick={() => handleSubmit('active')}
-                        disabled={saving || uploadingImage || uploadingVideo}
-                        className="flex items-center gap-2 rounded-md bg-primary px-5 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
-                    >
-                        <Save className="h-4 w-4" />
-                        Publish
-                    </button>
+
+                    <div className="flex flex-wrap gap-2">
+                        <button
+                            type="button"
+                            onClick={() => handleSubmit('draft')}
+                            disabled={saving || uploadingImage || uploadingVideo}
+                            className="flex items-center gap-2 rounded-md border border-gray-300 bg-white px-5 py-2 text-sm font-medium text-text-light hover:bg-gray-50 disabled:opacity-50"
+                        >
+                            <Save className="h-4 w-4" />
+                            Save Draft
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleSubmit('active')}
+                            disabled={saving || uploadingImage || uploadingVideo}
+                            className="flex items-center gap-2 rounded-md bg-primary px-5 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
+                        >
+                            <Save className="h-4 w-4" />
+                            Publish
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
