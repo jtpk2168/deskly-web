@@ -50,8 +50,61 @@ export type AdminOrder = {
     customer: string
     items: string
     total: number | null
-    status: string | null
+    status: AdminOrderStatus | null
     date: string
+}
+
+export type AdminOrderStatus = 'active' | 'pending' | 'cancelled' | 'completed'
+export type AdminOrderSortColumn = 'created_at' | 'monthly_total' | 'status'
+export type AdminOrderFilters = PaginationQuery & {
+    search?: string
+    status?: AdminOrderStatus | 'all'
+    sortBy?: AdminOrderSortColumn
+    sortDir?: 'asc' | 'desc'
+}
+
+export type AdminOrderDetail = {
+    id: string
+    userId: string
+    bundleId: string | null
+    status: AdminOrderStatus | null
+    total: number | null
+    createdAt: string
+    startDate: string | null
+    endDate: string | null
+    itemsSummary: string
+    items: Array<{
+        productName: string
+        category: string | null
+        monthlyPrice: number | null
+        durationMonths: number | null
+        quantity: number
+        imageUrl: string | null
+    }>
+    customer: {
+        id: string | null
+        name: string | null
+        phoneNumber: string | null
+        jobTitle: string | null
+        companyName: string | null
+        industry: string | null
+        teamSize: string | null
+        address: string | null
+    }
+    bundle: {
+        id: string | null
+        name: string | null
+        description: string | null
+        imageUrl: string | null
+        monthlyPrice: number | null
+    }
+}
+
+export type AdminOrderUpdatePayload = {
+    status?: AdminOrderStatus
+    start_date?: string | null
+    end_date?: string | null
+    monthly_total?: number | null
 }
 
 export type AdminUser = {
@@ -134,6 +187,17 @@ function buildProductQueryParams(filters: AdminProductFilters = {}) {
     if (filters.maxPrice !== undefined && String(filters.maxPrice) !== '') params.set('max_price', String(filters.maxPrice))
     if (filters.minStock !== undefined && String(filters.minStock) !== '') params.set('min_stock', String(filters.minStock))
     if (filters.maxStock !== undefined && String(filters.maxStock) !== '') params.set('max_stock', String(filters.maxStock))
+
+    return params
+}
+
+function buildOrderQueryParams(filters: AdminOrderFilters = {}) {
+    const params = buildPaginationParams(filters)
+
+    if (filters.search?.trim()) params.set('search', filters.search.trim())
+    if (filters.status && filters.status !== 'all') params.set('status', filters.status)
+    if (filters.sortBy) params.set('sort_by', filters.sortBy)
+    if (filters.sortDir) params.set('sort_dir', filters.sortDir)
 
     return params
 }
@@ -241,11 +305,27 @@ export async function createProduct(productData: ProductUpsertPayload) {
 }
 
 // Orders (Subscriptions)
-export async function getOrders(query: PaginationQuery = {}): Promise<PaginatedResult<AdminOrder>> {
-    const params = buildPaginationParams(query)
+export async function getOrders(query: AdminOrderFilters = {}): Promise<PaginatedResult<AdminOrder>> {
+    const params = buildOrderQueryParams(query)
     const qs = params.toString()
-    const res = await fetch(`/api/orders${qs ? `?${qs}` : ''}`, { cache: 'no-store' })
+    const res = await fetch(`/api/admin/orders${qs ? `?${qs}` : ''}`, { cache: 'no-store' })
     return parsePaginatedResponse<AdminOrder>(res)
+}
+
+export async function getOrder(id: string): Promise<AdminOrderDetail> {
+    const res = await fetch(`/api/admin/orders/${id}`, { cache: 'no-store' })
+    return parseResponse<AdminOrderDetail>(res)
+}
+
+export async function updateOrder(id: string, payload: AdminOrderUpdatePayload): Promise<AdminOrderDetail> {
+    const res = await fetch(`/api/admin/orders/${id}`, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    })
+    return parseResponse<AdminOrderDetail>(res)
 }
 
 // Admins

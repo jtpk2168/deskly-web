@@ -4,6 +4,36 @@ import { successResponse, errorResponse, parseUUID } from '../../../../../lib/ap
 
 type RouteParams = { params: Promise<{ id: string }> }
 
+type SubscriptionItemRecord = {
+    product_name: string | null
+    category: string | null
+    monthly_price: number | string | null
+    duration_months: number | string | null
+    quantity: number | string | null
+    products: {
+        image_url: string | null
+    } | {
+        image_url: string | null
+    }[] | null
+}
+
+function parseMoney(value: number | string | null | undefined) {
+    if (value == null) return null
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+}
+
+function parsePositiveInteger(value: number | string | null | undefined) {
+    const parsed = Number(value)
+    if (!Number.isInteger(parsed) || parsed <= 0) return null
+    return parsed
+}
+
+function unwrapSingle<T>(value: T | T[] | null | undefined): T | null {
+    if (Array.isArray(value)) return value[0] ?? null
+    return value ?? null
+}
+
 /** GET /api/subscriptions/:id — Get subscription details */
 export async function GET(_request: NextRequest, { params }: RouteParams) {
     try {
@@ -18,7 +48,44 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
             .single()
 
         if (error || !data) return errorResponse('Subscription not found', 404)
-        return successResponse(data)
+
+        let itemRows: SubscriptionItemRecord[] = []
+        const { data: itemData, error: itemError } = await supabaseServer
+            .from('subscription_items')
+            .select(`
+                product_name,
+                category,
+                monthly_price,
+                duration_months,
+                quantity,
+                products (
+                    image_url
+                )
+            `)
+            .eq('subscription_id', uuid)
+            .order('created_at', { ascending: true })
+
+        // Fail open: details page should still load even when order-item rows are unavailable.
+        if (!itemError) {
+            itemRows = (itemData ?? []) as SubscriptionItemRecord[]
+        }
+
+        const subscriptionItems = itemRows.map((item) => {
+            const product = unwrapSingle(item.products)
+            return {
+                product_name: item.product_name?.trim() || item.category?.trim() || 'Item',
+                category: item.category?.trim() || null,
+                monthly_price: parseMoney(item.monthly_price),
+                duration_months: parsePositiveInteger(item.duration_months),
+                quantity: parsePositiveInteger(item.quantity) ?? 1,
+                image_url: product?.image_url ?? null,
+            }
+        })
+
+        return successResponse({
+            ...data,
+            subscription_items: subscriptionItems,
+        })
     } catch {
         return errorResponse('Internal server error', 500)
     }

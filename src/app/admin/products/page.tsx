@@ -399,18 +399,18 @@ export default function ProductsPage() {
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">Image</th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">
                                     <button type="button" onClick={() => handleSort('name')} className="inline-flex items-center gap-1">
-                                        Name {getSortIndicator('name')}
+                                        NAME {getSortIndicator('name')}
                                     </button>
                                 </th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">Category</th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">
                                     <button type="button" onClick={() => handleSort('monthly_price')} className="inline-flex items-center gap-1">
-                                        Price {getSortIndicator('monthly_price')}
+                                        PRICE {getSortIndicator('monthly_price')}
                                     </button>
                                 </th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">
                                     <button type="button" onClick={() => handleSort('stock_quantity')} className="inline-flex items-center gap-1">
-                                        Stock {getSortIndicator('stock_quantity')}
+                                        STOCK {getSortIndicator('stock_quantity')}
                                     </button>
                                 </th>
                                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">Status</th>
