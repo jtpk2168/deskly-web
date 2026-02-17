@@ -65,37 +65,51 @@ export async function POST(request: NextRequest) {
         // Upsert company if provided
         let companyData = null
         if (company) {
-            const { data: existingCompany } = await supabaseServer
+            const normalizedCompany = {
+                company_name: company.company_name,
+                registration_number: company.registration_number ?? null,
+                address: company.address ?? null,
+                office_city: company.office_city ?? null,
+                office_zip_postal: company.office_zip_postal ?? null,
+                delivery_address: company.delivery_address ?? company.address ?? null,
+                delivery_city: company.delivery_city ?? company.office_city ?? null,
+                delivery_zip_postal: company.delivery_zip_postal ?? company.office_zip_postal ?? null,
+                industry: company.industry ?? null,
+                team_size: company.team_size ?? null,
+            }
+
+            const { data: existingCompany, error: existingCompanyError } = await supabaseServer
                 .from('companies')
                 .select('id')
                 .eq('profile_id', uuid)
-                .single()
+                .maybeSingle()
+
+            if (existingCompanyError) return errorResponse(existingCompanyError.message, 500)
 
             if (existingCompany) {
-                const { data } = await supabaseServer
+                const { data, error: updateCompanyError } = await supabaseServer
                     .from('companies')
                     .update({
-                        ...company,
+                        ...normalizedCompany,
                         updated_at: new Date().toISOString(),
                     })
                     .eq('profile_id', uuid)
                     .select()
                     .single()
+
+                if (updateCompanyError) return errorResponse(updateCompanyError.message, 500)
                 companyData = data
             } else {
-                const { data } = await supabaseServer
+                const { data, error: insertCompanyError } = await supabaseServer
                     .from('companies')
                     .insert({
                         profile_id: uuid,
-                        company_name: company.company_name,
-                        registration_number: company.registration_number ?? null,
-                        address: company.address ?? null,
-                        industry: company.industry ?? null,
-                        team_size: company.team_size ?? null,
-                        rental_duration_preference: company.rental_duration_preference ?? null,
+                        ...normalizedCompany,
                     })
                     .select()
                     .single()
+
+                if (insertCompanyError) return errorResponse(insertCompanyError.message, 500)
                 companyData = data
             }
         }

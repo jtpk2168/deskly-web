@@ -20,6 +20,26 @@ type NormalizedSubscriptionItem = {
     quantity: number
 }
 
+type ProfileEligibilityRecord = {
+    id: string
+    full_name: string | null
+    job_title: string | null
+    phone_number: string | null
+}
+
+type CompanyEligibilityRecord = {
+    company_name: string | null
+    registration_number: string | null
+    address: string | null
+    office_city: string | null
+    office_zip_postal: string | null
+    delivery_address: string | null
+    delivery_city: string | null
+    delivery_zip_postal: string | null
+    industry: string | null
+    team_size: string | null
+}
+
 function parseOptionalDate(value: unknown, fieldName: string) {
     if (value == null || value === '') return { value: null as string | null, error: null as string | null }
     if (typeof value !== 'string') return { value: null as string | null, error: `${fieldName} must be an ISO date string` }
@@ -103,18 +123,55 @@ function parseSubscriptionItems(value: unknown) {
     return { items: normalizedItems, error: null as string | null }
 }
 
-async function resolveAuthDisplayName(userId: string) {
-    const { data, error } = await supabaseServer.auth.admin.getUserById(userId)
-    if (error || !data.user) return null
+function hasText(value: string | null | undefined) {
+    return typeof value === 'string' && value.trim().length > 0
+}
 
-    const metadata = (data.user.user_metadata ?? {}) as Record<string, unknown>
-    const fullName = typeof metadata.full_name === 'string' ? metadata.full_name.trim() : ''
-    if (fullName) return fullName
+function getMissingProfileFields(
+    profile: ProfileEligibilityRecord | null,
+    company: CompanyEligibilityRecord | null,
+    businessEmail: string | null,
+) {
+    const missingFields: string[] = []
 
-    const name = typeof metadata.name === 'string' ? metadata.name.trim() : ''
-    if (name) return name
+    if (!hasText(profile?.full_name)) missingFields.push('Full Name')
+    if (!hasText(profile?.job_title)) missingFields.push('Job Title')
+    if (!hasText(profile?.phone_number)) missingFields.push('Phone Number')
+    if (!hasText(businessEmail)) missingFields.push('Business Email')
 
-    return data.user.email ?? null
+    if (!company) {
+        missingFields.push(
+            'Company Legal Name',
+            'Registration Number',
+            'HQ Office Address',
+            'Office City',
+            'Office Zip / Postal',
+            'Delivery Address',
+            'Delivery City',
+            'Delivery Zip / Postal',
+            'Industry',
+            'Team Size',
+        )
+        return missingFields
+    }
+
+    if (!hasText(company.company_name)) missingFields.push('Company Legal Name')
+    if (!hasText(company.registration_number)) missingFields.push('Registration Number')
+    if (!hasText(company.address)) missingFields.push('HQ Office Address')
+    if (!hasText(company.office_city)) missingFields.push('Office City')
+    if (!hasText(company.office_zip_postal)) missingFields.push('Office Zip / Postal')
+
+    const resolvedDeliveryAddress = hasText(company.delivery_address) ? company.delivery_address : company.address
+    const resolvedDeliveryCity = hasText(company.delivery_city) ? company.delivery_city : company.office_city
+    const resolvedDeliveryZipPostal = hasText(company.delivery_zip_postal) ? company.delivery_zip_postal : company.office_zip_postal
+
+    if (!hasText(resolvedDeliveryAddress)) missingFields.push('Delivery Address')
+    if (!hasText(resolvedDeliveryCity)) missingFields.push('Delivery City')
+    if (!hasText(resolvedDeliveryZipPostal)) missingFields.push('Delivery Zip / Postal')
+    if (!hasText(company.industry)) missingFields.push('Industry')
+    if (!hasText(company.team_size)) missingFields.push('Team Size')
+
+    return missingFields
 }
 
 /** GET /api/subscriptions?user_id= — List user's subscriptions */
@@ -172,11 +229,17 @@ export async function POST(request: NextRequest) {
         const parsedItems = parseSubscriptionItems(items)
         if (parsedItems.error) return errorResponse(parsedItems.error, 400)
 
-        const authDisplayName = await resolveAuthDisplayName(userUuid)
+        const { data: authUserData, error: authUserError } = await supabaseServer.auth.admin.getUserById(userUuid)
+        if (authUserError) {
+            return errorResponse(`Failed to validate user account: ${authUserError.message}`, 500)
+        }
+        if (!authUserData.user) {
+            return errorResponse('User account not found', 404)
+        }
 
         const { data: existingProfile, error: profileLookupError } = await supabaseServer
             .from('profiles')
-            .select('id, full_name')
+            .select('id, full_name, job_title, phone_number')
             .eq('id', userUuid)
             .maybeSingle()
 
@@ -184,24 +247,22 @@ export async function POST(request: NextRequest) {
             return errorResponse(`Failed to validate user profile: ${profileLookupError.message}`, 500)
         }
 
-        if (!existingProfile) {
-            const { error: createProfileError } = await supabaseServer
-                .from('profiles')
-                .insert({ id: userUuid, full_name: authDisplayName })
+        const { data: company, error: companyLookupError } = await supabaseServer
+            .from('companies')
+            .select('company_name, registration_number, address, office_city, office_zip_postal, delivery_address, delivery_city, delivery_zip_postal, industry, team_size')
+            .eq('profile_id', userUuid)
+            .maybeSingle()
 
-            // Ignore race-condition duplicate errors from concurrent checkouts.
-            if (createProfileError && createProfileError.code !== '23505') {
-                return errorResponse(`Failed to initialize profile for checkout: ${createProfileError.message}`, 500)
-            }
-        } else if (!existingProfile.full_name && authDisplayName) {
-            const { error: updateProfileError } = await supabaseServer
-                .from('profiles')
-                .update({ full_name: authDisplayName, updated_at: new Date().toISOString() })
-                .eq('id', userUuid)
+        if (companyLookupError) {
+            return errorResponse(`Failed to validate company profile: ${companyLookupError.message}`, 500)
+        }
 
-            if (updateProfileError) {
-                return errorResponse(`Failed to update profile name: ${updateProfileError.message}`, 500)
-            }
+        const missingProfileFields = getMissingProfileFields(existingProfile, company, authUserData.user.email ?? null)
+        if (missingProfileFields.length > 0) {
+            return errorResponse(
+                `Complete your profile before placing an order. Missing: ${missingProfileFields.join(', ')}`,
+                403,
+            )
         }
 
         const { data, error } = await supabaseServer
