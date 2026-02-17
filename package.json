@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "check:billing": "npx --no-install tsc --pretty false --module commonjs --target es2020 --skipLibCheck --esModuleInterop --outDir /tmp/deskly-billing-check scripts/billing/runBillingChecks.ts && node /tmp/deskly-billing-check/scripts/billing/runBillingChecks.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.8.0",

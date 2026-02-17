@@ -11,6 +11,9 @@ function getStatusVariant(status: string | null): 'default' | 'success' | 'warni
     const normalizedStatus = status?.toLowerCase()
     if (normalizedStatus === 'active') return 'success'
     if (normalizedStatus === 'pending') return 'warning'
+    if (normalizedStatus === 'pending_payment') return 'warning'
+    if (normalizedStatus === 'payment_failed') return 'error'
+    if (normalizedStatus === 'incomplete') return 'warning'
     if (normalizedStatus === 'cancelled') return 'error'
     if (normalizedStatus === 'completed') return 'outline'
     return 'default'
@@ -42,6 +45,9 @@ function toDateInputValue(value: string | null) {
 const STATUS_FILTER_OPTIONS: Array<{ value: 'all' | AdminOrderStatus; label: string }> = [
     { value: 'all', label: 'All Status' },
     { value: 'pending', label: 'Pending' },
+    { value: 'pending_payment', label: 'Pending Payment' },
+    { value: 'incomplete', label: 'Incomplete' },
+    { value: 'payment_failed', label: 'Payment Failed' },
     { value: 'active', label: 'Active' },
     { value: 'completed', label: 'Completed' },
     { value: 'cancelled', label: 'Cancelled' },

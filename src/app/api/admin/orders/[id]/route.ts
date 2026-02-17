@@ -297,7 +297,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         if (body?.status !== undefined) {
             const status = normalizeOrderStatus(body.status)
             if (!status) {
-                return errorResponse('Invalid status. Must be: active, pending, cancelled, or completed', 400)
+                return errorResponse('Invalid status. Must be: active, pending, pending_payment, payment_failed, incomplete, cancelled, or completed', 400)
             }
             updatePayload.status = status
         }

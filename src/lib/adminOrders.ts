@@ -1,4 +1,4 @@
-export const ADMIN_ORDER_STATUSES = ['active', 'pending', 'cancelled', 'completed'] as const
+export const ADMIN_ORDER_STATUSES = ['active', 'pending', 'pending_payment', 'payment_failed', 'incomplete', 'cancelled', 'completed'] as const
 export type AdminOrderStatus = (typeof ADMIN_ORDER_STATUSES)[number]
 
 export const ADMIN_ORDER_SORT_COLUMNS = ['created_at', 'monthly_total', 'status'] as const

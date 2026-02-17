@@ -54,7 +54,7 @@ export type AdminOrder = {
     date: string
 }
 
-export type AdminOrderStatus = 'active' | 'pending' | 'cancelled' | 'completed'
+export type AdminOrderStatus = 'active' | 'pending' | 'pending_payment' | 'payment_failed' | 'incomplete' | 'cancelled' | 'completed'
 export type AdminOrderSortColumn = 'created_at' | 'monthly_total' | 'status'
 export type AdminOrderFilters = PaginationQuery & {
     search?: string
@@ -113,6 +113,61 @@ export type AdminUser = {
     email: string
     role: 'Admin' | 'Customer'
     joinedDate: string
+}
+
+export type BillingProviderName = 'mock' | 'stripe'
+export type BillingWebhookEventStatus = 'received' | 'processed' | 'failed'
+export type BillingWebhookEventProvider = BillingProviderName
+
+export type BillingRuntimeConfig = {
+    provider: BillingProviderName | string
+    currency: string
+    minimum_term_months: number
+    sst_rate: number
+    stripe_automatic_tax_enabled: boolean
+}
+
+export type BillingCatalogSyncPayload = {
+    dry_run?: boolean
+    currency?: string
+    product_ids?: string[]
+}
+
+export type BillingCatalogSyncItem = {
+    product_id: string
+    product_name: string
+    action: 'skipped' | 'created'
+    provider_product_id: string
+    provider_price_id: string
+    unit_amount: number
+    currency: string
+}
+
+export type BillingCatalogSyncResult = {
+    provider: BillingProviderName | string
+    dry_run: boolean
+    total_products: number
+    created_count: number
+    skipped_count: number
+    synced: BillingCatalogSyncItem[]
+}
+
+export type BillingWebhookEvent = {
+    id: string
+    provider: BillingWebhookEventProvider
+    event_id: string
+    event_type: string
+    status: BillingWebhookEventStatus
+    error_message: string | null
+    processed_at: string | null
+    created_at: string
+    subscription_id: string | null
+}
+
+export type BillingWebhookEventFilters = PaginationQuery & {
+    status?: BillingWebhookEventStatus | 'all'
+    provider?: BillingWebhookEventProvider | 'all'
+    search?: string
 }
 
 export type ProductUpsertPayload = {
@@ -199,6 +254,14 @@ function buildOrderQueryParams(filters: AdminOrderFilters = {}) {
     if (filters.sortBy) params.set('sort_by', filters.sortBy)
     if (filters.sortDir) params.set('sort_dir', filters.sortDir)
 
+    return params
+}
+
+function buildBillingWebhookEventQueryParams(filters: BillingWebhookEventFilters = {}) {
+    const params = buildPaginationParams(filters)
+    if (filters.search?.trim()) params.set('search', filters.search.trim())
+    if (filters.status && filters.status !== 'all') params.set('status', filters.status)
+    if (filters.provider && filters.provider !== 'all') params.set('provider', filters.provider)
     return params
 }
 
@@ -326,6 +389,30 @@ export async function updateOrder(id: string, payload: AdminOrderUpdatePayload):
         body: JSON.stringify(payload),
     })
     return parseResponse<AdminOrderDetail>(res)
+}
+
+// Billing
+export async function getBillingRuntimeConfig(): Promise<BillingRuntimeConfig> {
+    const res = await fetch('/api/billing/config', { cache: 'no-store' })
+    return parseResponse<BillingRuntimeConfig>(res)
+}
+
+export async function syncBillingCatalog(payload: BillingCatalogSyncPayload): Promise<BillingCatalogSyncResult> {
+    const res = await fetch('/api/billing/catalog/sync', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    })
+    return parseResponse<BillingCatalogSyncResult>(res)
+}
+
+export async function getBillingWebhookEvents(filters: BillingWebhookEventFilters = {}): Promise<PaginatedResult<BillingWebhookEvent>> {
+    const params = buildBillingWebhookEventQueryParams(filters)
+    const qs = params.toString()
+    const res = await fetch(`/api/admin/billing/webhook-events${qs ? `?${qs}` : ''}`, { cache: 'no-store' })
+    return parsePaginatedResponse<BillingWebhookEvent>(res)
 }
 
 // Admins

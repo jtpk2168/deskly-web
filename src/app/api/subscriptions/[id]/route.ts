@@ -101,8 +101,31 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         const body = await request.json()
         const { status, end_date } = body
 
-        if (status && !['active', 'pending', 'cancelled', 'completed'].includes(status)) {
-            return errorResponse('Invalid status. Must be: active, pending, cancelled, or completed', 400)
+        if (status && !['active', 'pending', 'pending_payment', 'payment_failed', 'incomplete', 'cancelled', 'completed'].includes(status)) {
+            return errorResponse('Invalid status. Must be: active, pending, pending_payment, payment_failed, incomplete, cancelled, or completed', 400)
+        }
+
+        if (status === 'cancelled') {
+            const { data: existingSubscription, error: existingSubscriptionError } = await supabaseServer
+                .from('subscriptions')
+                .select('id, commitment_end_at')
+                .eq('id', uuid)
+                .maybeSingle()
+
+            if (existingSubscriptionError) {
+                return errorResponse(existingSubscriptionError.message, 500)
+            }
+
+            if (!existingSubscription) {
+                return errorResponse('Subscription not found', 404)
+            }
+
+            if (existingSubscription.commitment_end_at) {
+                const commitmentEnd = new Date(existingSubscription.commitment_end_at)
+                if (!Number.isNaN(commitmentEnd.getTime()) && commitmentEnd.getTime() > Date.now()) {
+                    return errorResponse(`Cancellation blocked until commitment end date ${commitmentEnd.toISOString()}`, 409)
+                }
+            }
         }
 
         const updatePayload: Record<string, unknown> = {}
