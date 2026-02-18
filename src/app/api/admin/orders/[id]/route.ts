@@ -2,8 +2,19 @@ import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../../../lib/apiResponse'
 import { normalizeOrderStatus } from '@/lib/adminOrders'
+import { getBillingProviderByName } from '@/lib/billing/providers'
+import { BillingProviderName } from '@/lib/billing/types'
 
 type RouteParams = { params: Promise<{ id: string }> }
+
+type CancellationReferenceRow = {
+    id: string
+    status: string | null
+    billing_provider: BillingProviderName | string | null
+    provider_subscription_id: string | null
+    commitment_end_at: string | null
+    end_date: string | null
+}
 
 type OrderRecord = {
     id: string
@@ -11,9 +22,17 @@ type OrderRecord = {
     bundle_id: string | null
     status: string | null
     monthly_total: number | string | null
+    subtotal_amount: number | string | null
+    tax_amount: number | string | null
     start_date: string | null
     end_date: string | null
     created_at: string
+    delivery_company_name: string | null
+    delivery_address: string | null
+    delivery_city: string | null
+    delivery_zip_postal: string | null
+    delivery_contact_name: string | null
+    delivery_contact_phone: string | null
     bundles: {
         id: string
         name: string | null
@@ -45,6 +64,11 @@ type CompanyRecord = {
     industry: string | null
     team_size: string | null
     address: string | null
+    office_city: string | null
+    office_zip_postal: string | null
+    delivery_address: string | null
+    delivery_city: string | null
+    delivery_zip_postal: string | null
 }
 
 type SubscriptionItemRecord = {
@@ -67,6 +91,8 @@ type OrderDetailsResponse = {
     bundleId: string | null
     status: string | null
     total: number | null
+    subtotalAmount: number | null
+    taxAmount: number | null
     createdAt: string
     startDate: string | null
     endDate: string | null
@@ -88,6 +114,8 @@ type OrderDetailsResponse = {
         industry: string | null
         teamSize: string | null
         address: string | null
+        officeAddress: string | null
+        deliveryAddress: string | null
     }
     bundle: {
         id: string | null
@@ -108,6 +136,24 @@ function parsePositiveInteger(value: number | string | null | undefined) {
     const parsed = Number(value)
     if (!Number.isInteger(parsed) || parsed <= 0) return null
     return parsed
+}
+
+function hasText(value: string | null | undefined): value is string {
+    return typeof value === 'string' && value.trim().length > 0
+}
+
+function composeAddress(line1: string | null | undefined, city: string | null | undefined, zipPostal: string | null | undefined) {
+    const parts: string[] = []
+    const normalizedLine1 = hasText(line1) ? line1.trim() : null
+    const normalizedCity = hasText(city) ? city.trim() : null
+    const normalizedZipPostal = hasText(zipPostal) ? zipPostal.trim() : null
+
+    if (normalizedLine1) parts.push(normalizedLine1)
+
+    const locality = [normalizedCity, normalizedZipPostal].filter(Boolean).join(' ')
+    if (locality) parts.push(locality)
+
+    return parts.length > 0 ? parts.join(', ') : null
 }
 
 function unwrapSingle<T>(value: T | T[] | null | undefined): T | null {
@@ -147,6 +193,10 @@ function parseNullableDate(input: unknown): string | null | undefined {
     return parsed.toISOString()
 }
 
+function normalizeBillingProvider(value: string | null | undefined): BillingProviderName {
+    return value === 'stripe' ? 'stripe' : 'mock'
+}
+
 async function fetchOrderDetails(orderId: string): Promise<OrderDetailsResponse | null> {
     const { data, error } = await supabaseServer
         .from('subscriptions')
@@ -156,9 +206,17 @@ async function fetchOrderDetails(orderId: string): Promise<OrderDetailsResponse 
             bundle_id,
             status,
             monthly_total,
+            subtotal_amount,
+            tax_amount,
             start_date,
             end_date,
             created_at,
+            delivery_company_name,
+            delivery_address,
+            delivery_city,
+            delivery_zip_postal,
+            delivery_contact_name,
+            delivery_contact_phone,
             bundles (
                 id,
                 name,
@@ -184,12 +242,23 @@ async function fetchOrderDetails(orderId: string): Promise<OrderDetailsResponse 
 
     const { data: companyData } = await supabaseServer
         .from('companies')
-        .select('company_name, industry, team_size, address')
+        .select('company_name, industry, team_size, address, office_city, office_zip_postal, delivery_address, delivery_city, delivery_zip_postal')
         .eq('profile_id', record.user_id)
         .maybeSingle()
 
     const company = (companyData as CompanyRecord | null) ?? null
+    const officeAddress = composeAddress(company?.address, company?.office_city, company?.office_zip_postal)
+    const fallbackDeliveryAddress = composeAddress(
+        hasText(company?.delivery_address) ? company?.delivery_address : company?.address,
+        hasText(company?.delivery_city) ? company?.delivery_city : company?.office_city,
+        hasText(company?.delivery_zip_postal) ? company?.delivery_zip_postal : company?.office_zip_postal,
+    )
+    const orderDeliveryAddress = composeAddress(record.delivery_address, record.delivery_city, record.delivery_zip_postal)
+    const deliveryAddress = orderDeliveryAddress ?? fallbackDeliveryAddress
     const customerName = await resolveCustomerName(record.user_id, profile?.full_name ?? null)
+    const siteContactName = hasText(record.delivery_contact_name) ? record.delivery_contact_name.trim() : null
+    const siteContactPhone = hasText(record.delivery_contact_phone) ? record.delivery_contact_phone.trim() : null
+    const deliveryCompanyName = hasText(record.delivery_company_name) ? record.delivery_company_name.trim() : null
 
     let itemRows: SubscriptionItemRecord[] = []
     const { data: itemData, error: itemError } = await supabaseServer
@@ -244,6 +313,8 @@ async function fetchOrderDetails(orderId: string): Promise<OrderDetailsResponse 
         bundleId: record.bundle_id,
         status: record.status,
         total: parseMoney(record.monthly_total),
+        subtotalAmount: parseMoney(record.subtotal_amount),
+        taxAmount: parseMoney(record.tax_amount),
         createdAt: record.created_at,
         startDate: record.start_date,
         endDate: record.end_date,
@@ -251,13 +322,15 @@ async function fetchOrderDetails(orderId: string): Promise<OrderDetailsResponse 
         items,
         customer: {
             id: profile?.id ?? null,
-            name: customerName,
-            phoneNumber: profile?.phone_number ?? null,
+            name: siteContactName ?? customerName,
+            phoneNumber: siteContactPhone ?? profile?.phone_number ?? null,
             jobTitle: profile?.job_title ?? null,
-            companyName: company?.company_name ?? null,
+            companyName: deliveryCompanyName ?? company?.company_name ?? null,
             industry: company?.industry ?? null,
             teamSize: company?.team_size ?? null,
-            address: company?.address ?? null,
+            address: officeAddress,
+            officeAddress,
+            deliveryAddress,
         },
         bundle: {
             id: bundle?.id ?? null,
@@ -299,6 +372,58 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
             if (!status) {
                 return errorResponse('Invalid status. Must be: active, pending, pending_payment, payment_failed, incomplete, cancelled, or completed', 400)
             }
+
+            if (status === 'cancelled') {
+                const { data: cancellationReference, error: cancellationReferenceError } = await supabaseServer
+                    .from('subscriptions')
+                    .select('id, status, billing_provider, provider_subscription_id, commitment_end_at, end_date')
+                    .eq('id', uuid)
+                    .maybeSingle()
+
+                if (cancellationReferenceError) {
+                    return errorResponse(`Failed to validate cancellation state: ${cancellationReferenceError.message}`, 500)
+                }
+
+                if (!cancellationReference) {
+                    return errorResponse('Order not found', 404)
+                }
+
+                const reference = cancellationReference as CancellationReferenceRow
+                if (reference.status !== 'cancelled') {
+                    if (reference.commitment_end_at) {
+                        const commitmentEnd = new Date(reference.commitment_end_at)
+                        if (!Number.isNaN(commitmentEnd.getTime()) && commitmentEnd.getTime() > Date.now()) {
+                            return errorResponse(`Cancellation blocked until commitment end date ${commitmentEnd.toISOString()}`, 409)
+                        }
+                    }
+
+                    const billingProvider = normalizeBillingProvider(reference.billing_provider)
+                    const providerSubscriptionId = reference.provider_subscription_id?.trim() || null
+                    if (billingProvider === 'stripe' && !providerSubscriptionId) {
+                        return errorResponse('Cannot cancel on Stripe because provider_subscription_id is missing', 409)
+                    }
+
+                    if (providerSubscriptionId) {
+                        try {
+                            const provider = getBillingProviderByName(billingProvider)
+                            const cancellation = await provider.cancelSubscription({
+                                providerSubscriptionId,
+                                reason: 'Cancelled by admin in Deskly',
+                            })
+
+                            if (body?.end_date === undefined && cancellation.cancelledAt) {
+                                updatePayload.end_date = cancellation.cancelledAt
+                            }
+                        } catch (cancellationError) {
+                            const message = cancellationError instanceof Error
+                                ? cancellationError.message
+                                : 'Failed to cancel provider subscription'
+                            return errorResponse(message, 502)
+                        }
+                    }
+                }
+            }
+
             updatePayload.status = status
         }
 

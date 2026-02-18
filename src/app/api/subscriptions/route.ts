@@ -127,6 +127,12 @@ function hasText(value: string | null | undefined) {
     return typeof value === 'string' && value.trim().length > 0
 }
 
+function parseOptionalText(value: unknown) {
+    if (typeof value !== 'string') return null
+    const normalized = value.trim()
+    return normalized.length > 0 ? normalized : null
+}
+
 function getMissingProfileFields(
     profile: ProfileEligibilityRecord | null,
     company: CompanyEligibilityRecord | null,
@@ -202,7 +208,20 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json()
-        const { user_id, bundle_id, start_date, end_date, monthly_total, items } = body
+        const {
+            user_id,
+            bundle_id,
+            start_date,
+            end_date,
+            monthly_total,
+            items,
+            delivery_company_name,
+            delivery_address,
+            delivery_city,
+            delivery_zip_postal,
+            delivery_contact_name,
+            delivery_contact_phone,
+        } = body
 
         if (!user_id) {
             return errorResponse('user_id is required', 400)
@@ -265,6 +284,33 @@ export async function POST(request: NextRequest) {
             )
         }
 
+        const resolvedDeliveryCompanyName = parseOptionalText(delivery_company_name) ?? company?.company_name ?? null
+        const resolvedDeliveryAddress = parseOptionalText(delivery_address)
+            ?? (hasText(company?.delivery_address) ? company?.delivery_address : company?.address)
+            ?? null
+        const resolvedDeliveryCity = parseOptionalText(delivery_city)
+            ?? (hasText(company?.delivery_city) ? company?.delivery_city : company?.office_city)
+            ?? null
+        const resolvedDeliveryZipPostal = parseOptionalText(delivery_zip_postal)
+            ?? (hasText(company?.delivery_zip_postal) ? company?.delivery_zip_postal : company?.office_zip_postal)
+            ?? null
+        const resolvedDeliveryContactName = parseOptionalText(delivery_contact_name) ?? existingProfile?.full_name ?? null
+        const resolvedDeliveryContactPhone = parseOptionalText(delivery_contact_phone) ?? existingProfile?.phone_number ?? null
+
+        const missingDeliveryFields: string[] = []
+        if (!hasText(resolvedDeliveryCompanyName)) missingDeliveryFields.push('Company Name')
+        if (!hasText(resolvedDeliveryAddress)) missingDeliveryFields.push('Delivery Address')
+        if (!hasText(resolvedDeliveryCity)) missingDeliveryFields.push('Delivery City')
+        if (!hasText(resolvedDeliveryZipPostal)) missingDeliveryFields.push('Delivery Zip / Postal')
+        if (!hasText(resolvedDeliveryContactName)) missingDeliveryFields.push('Site Contact Name')
+        if (!hasText(resolvedDeliveryContactPhone)) missingDeliveryFields.push('Site Contact Phone')
+        if (missingDeliveryFields.length > 0) {
+            return errorResponse(
+                `Delivery details are incomplete. Missing: ${missingDeliveryFields.join(', ')}`,
+                400,
+            )
+        }
+
         const { data, error } = await supabaseServer
             .from('subscriptions')
             .insert({
@@ -274,6 +320,12 @@ export async function POST(request: NextRequest) {
                 start_date: startDate.value,
                 end_date: endDate.value,
                 monthly_total: monthlyTotal.value,
+                delivery_company_name: resolvedDeliveryCompanyName,
+                delivery_address: resolvedDeliveryAddress,
+                delivery_city: resolvedDeliveryCity,
+                delivery_zip_postal: resolvedDeliveryZipPostal,
+                delivery_contact_name: resolvedDeliveryContactName,
+                delivery_contact_phone: resolvedDeliveryContactPhone,
             })
             .select()
             .single()

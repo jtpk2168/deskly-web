@@ -18,6 +18,14 @@ function readString(value: unknown, fieldName: string) {
     throw new Error(`Stripe response missing ${fieldName}`)
 }
 
+function readOptionalString(value: unknown) {
+    return typeof value === 'string' && value.trim() ? value : null
+}
+
+function readOptionalUnixTimestamp(value: unknown) {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
 function appendMetadata(params: URLSearchParams, prefix: string, metadata?: Record<string, string>) {
     if (!metadata) return
     for (const [key, value] of Object.entries(metadata)) {
@@ -26,15 +34,19 @@ function appendMetadata(params: URLSearchParams, prefix: string, metadata?: Reco
     }
 }
 
-async function stripePost(path: string, params: URLSearchParams) {
+async function stripeRequest(method: 'GET' | 'POST', path: string, params?: URLSearchParams) {
     const secretKey = requireSecretKey()
-    const response = await fetch(`${STRIPE_API_BASE}${path}`, {
-        method: 'POST',
+    const url = method === 'GET' && params
+        ? `${STRIPE_API_BASE}${path}?${params.toString()}`
+        : `${STRIPE_API_BASE}${path}`
+
+    const response = await fetch(url, {
+        method,
         headers: {
             Authorization: `Bearer ${secretKey}`,
             'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: params.toString(),
+        body: method === 'POST' ? params?.toString() ?? '' : undefined,
         cache: 'no-store',
     })
 
@@ -57,6 +69,14 @@ async function stripePost(path: string, params: URLSearchParams) {
     }
 
     return parsed ?? {}
+}
+
+async function stripePost(path: string, params: URLSearchParams) {
+    return stripeRequest('POST', path, params)
+}
+
+async function stripeGet(path: string, params?: URLSearchParams) {
+    return stripeRequest('GET', path, params)
 }
 
 export class StripeBillingProvider implements BillingProvider {
@@ -99,6 +119,9 @@ export class StripeBillingProvider implements BillingProvider {
 
         input.lineItems.forEach((lineItem, index) => {
             params.set(`line_items[${index}][quantity]`, String(lineItem.quantity))
+            if (!input.automaticTax && input.manualTaxRateId) {
+                params.set(`line_items[${index}][tax_rates][0]`, input.manualTaxRateId)
+            }
 
             if (lineItem.providerPriceId) {
                 params.set(`line_items[${index}][price]`, lineItem.providerPriceId)
@@ -130,6 +153,14 @@ export class StripeBillingProvider implements BillingProvider {
             sessionId: typeof createdSession.id === 'string' ? createdSession.id : null,
             providerSubscriptionId,
         }
+    }
+
+    async getCheckoutSessionUrl(sessionId: string) {
+        const normalizedSessionId = sessionId.trim()
+        if (!normalizedSessionId) return null
+
+        const session = await stripeGet(`/checkout/sessions/${encodeURIComponent(normalizedSessionId)}`)
+        return readOptionalString(session.url)
     }
 
     async ensureCatalogPrice(input: Parameters<BillingProvider['ensureCatalogPrice']>[0]) {
@@ -165,5 +196,29 @@ export class StripeBillingProvider implements BillingProvider {
 
         const createdProduct = await stripePost('/products', productParams)
         return readString(createdProduct.id, 'product.id')
+    }
+
+    async cancelSubscription(input: Parameters<BillingProvider['cancelSubscription']>[0]) {
+        const normalizedSubscriptionId = input.providerSubscriptionId.trim()
+        if (!normalizedSubscriptionId) {
+            throw new Error('Stripe provider subscription ID is required')
+        }
+
+        const cancelParams = new URLSearchParams()
+
+        const cancelledSubscription = await stripePost(
+            `/subscriptions/${encodeURIComponent(normalizedSubscriptionId)}/cancel`,
+            cancelParams,
+        )
+
+        const cancelledAtUnix = readOptionalUnixTimestamp(cancelledSubscription.canceled_at)
+        const cancelledAtIso = cancelledAtUnix == null
+            ? null
+            : new Date(cancelledAtUnix * 1000).toISOString()
+
+        return {
+            providerSubscriptionId: readOptionalString(cancelledSubscription.id) ?? normalizedSubscriptionId,
+            cancelledAt: cancelledAtIso,
+        }
     }
 }

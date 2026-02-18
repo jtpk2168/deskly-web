@@ -248,7 +248,7 @@ export default function SettingsPage() {
                 ) : billingConfigLoading ? (
                     <p className="text-sm text-subtext-light">Loading billing config...</p>
                 ) : billingConfig ? (
-                    <div className="grid gap-3 md:grid-cols-5">
+                    <div className="grid gap-3 md:grid-cols-6">
                         <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-3">
                             <p className="text-xs uppercase tracking-wider text-subtext-light">Provider</p>
                             <div className="mt-1"><Badge variant={getProviderVariant(billingConfig.provider)}>{billingConfig.provider}</Badge></div>
@@ -268,6 +268,10 @@ export default function SettingsPage() {
                         <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-3">
                             <p className="text-xs uppercase tracking-wider text-subtext-light">Auto Tax</p>
                             <p className="mt-1 font-semibold text-text-light">{billingConfig.stripe_automatic_tax_enabled ? 'Enabled' : 'Disabled'}</p>
+                        </div>
+                        <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-3">
+                            <p className="text-xs uppercase tracking-wider text-subtext-light">Manual Tax Rate</p>
+                            <p className="mt-1 font-mono text-xs font-semibold text-text-light">{billingConfig.stripe_manual_tax_rate_id ?? '-'}</p>
                         </div>
                     </div>
                 ) : null}

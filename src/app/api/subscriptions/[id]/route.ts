@@ -17,6 +17,26 @@ type SubscriptionItemRecord = {
     }[] | null
 }
 
+type BillingInvoiceRecord = {
+    id: string
+    provider_invoice_id: string
+    invoice_number: string | null
+    status: string
+    currency: string
+    subtotal_amount: number | string | null
+    tax_amount: number | string | null
+    total_amount: number | string | null
+    amount_paid: number | string | null
+    amount_due: number | string | null
+    hosted_invoice_url: string | null
+    invoice_pdf: string | null
+    due_date: string | null
+    paid_at: string | null
+    period_start_at: string | null
+    period_end_at: string | null
+    created_at: string
+}
+
 function parseMoney(value: number | string | null | undefined) {
     if (value == null) return null
     const parsed = Number(value)
@@ -82,9 +102,60 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
             }
         })
 
+        let invoiceRows: BillingInvoiceRecord[] = []
+        const { data: invoiceData, error: invoiceError } = await supabaseServer
+            .from('billing_invoices')
+            .select(`
+                id,
+                provider_invoice_id,
+                invoice_number,
+                status,
+                currency,
+                subtotal_amount,
+                tax_amount,
+                total_amount,
+                amount_paid,
+                amount_due,
+                hosted_invoice_url,
+                invoice_pdf,
+                due_date,
+                paid_at,
+                period_start_at,
+                period_end_at,
+                created_at
+            `)
+            .eq('subscription_id', uuid)
+            .order('created_at', { ascending: false })
+
+        // Fail open: order detail remains available even if invoice mirror rows are unavailable.
+        if (!invoiceError) {
+            invoiceRows = (invoiceData ?? []) as BillingInvoiceRecord[]
+        }
+
+        const billingInvoices = invoiceRows.map((invoice) => ({
+            id: invoice.id,
+            provider_invoice_id: invoice.provider_invoice_id,
+            invoice_number: invoice.invoice_number,
+            status: invoice.status,
+            currency: invoice.currency,
+            subtotal_amount: parseMoney(invoice.subtotal_amount),
+            tax_amount: parseMoney(invoice.tax_amount),
+            total_amount: parseMoney(invoice.total_amount),
+            amount_paid: parseMoney(invoice.amount_paid),
+            amount_due: parseMoney(invoice.amount_due),
+            hosted_invoice_url: invoice.hosted_invoice_url,
+            invoice_pdf: invoice.invoice_pdf,
+            due_date: invoice.due_date,
+            paid_at: invoice.paid_at,
+            period_start_at: invoice.period_start_at,
+            period_end_at: invoice.period_end_at,
+            created_at: invoice.created_at,
+        }))
+
         return successResponse({
             ...data,
             subscription_items: subscriptionItems,
+            billing_invoices: billingInvoices,
         })
     } catch {
         return errorResponse('Internal server error', 500)

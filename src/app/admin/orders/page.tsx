@@ -23,9 +23,19 @@ function formatCurrency(value: number | null) {
     return `RM ${value?.toFixed(2) ?? '0.00'}`
 }
 
+function formatCurrencyOrDash(value: number | null) {
+    if (value == null) return '-'
+    return formatCurrency(value)
+}
+
 function formatDate(value: string | null) {
     if (!value) return '-'
     return new Date(value).toLocaleDateString()
+}
+
+function formatAddress(value: string | null) {
+    if (!value || value.trim().length === 0) return '-'
+    return value
 }
 
 function formatOrderId(value: string) {
@@ -400,6 +410,20 @@ export default function OrdersPage() {
                                             {selectedOrder.customer.phoneNumber && (
                                                 <p className="mt-1 text-sm text-subtext-light">{selectedOrder.customer.phoneNumber}</p>
                                             )}
+                                            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                                                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+                                                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-subtext-light">Office Address</p>
+                                                    <p className="mt-1 text-sm leading-relaxed text-text-light">
+                                                        {formatAddress(selectedOrder.customer.officeAddress ?? selectedOrder.customer.address)}
+                                                    </p>
+                                                </div>
+                                                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
+                                                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-subtext-light">Delivery Address</p>
+                                                    <p className="mt-1 text-sm leading-relaxed text-text-light">
+                                                        {formatAddress(selectedOrder.customer.deliveryAddress ?? selectedOrder.customer.address)}
+                                                    </p>
+                                                </div>
+                                            </div>
                                         </div>
 
                                         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -458,13 +482,21 @@ export default function OrdersPage() {
                                         </div>
                                     </div>
 
-                                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
                                         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                                             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Created</p>
                                             <p className="mt-2 text-lg font-semibold text-text-light">{formatDate(selectedOrder.createdAt)}</p>
                                         </div>
                                         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-                                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Monthly Rate</p>
+                                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Subtotal</p>
+                                            <p className="mt-2 text-lg font-semibold text-text-light">{formatCurrencyOrDash(selectedOrder.subtotalAmount)}</p>
+                                        </div>
+                                        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">SST</p>
+                                            <p className="mt-2 text-lg font-semibold text-text-light">{formatCurrencyOrDash(selectedOrder.taxAmount)}</p>
+                                        </div>
+                                        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Monthly Total</p>
                                             <p className="mt-2 text-lg font-semibold text-text-light">{formatCurrency(selectedOrder.total)}</p>
                                         </div>
                                         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">

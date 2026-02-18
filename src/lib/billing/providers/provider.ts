@@ -35,6 +35,7 @@ export type CreateBillingCheckoutSessionInput = {
     lineItems: BillingSessionLineItem[]
     currency: string
     automaticTax: boolean
+    manualTaxRateId?: string | null
     minimumTermMonths: number
     successUrl: string
     cancelUrl: string
@@ -66,10 +67,21 @@ export type EnsureBillingCatalogPriceResult = {
     intervalCount: number
 }
 
+export type CancelBillingSubscriptionInput = {
+    providerSubscriptionId: string
+    reason?: string
+}
+
+export type CancelBillingSubscriptionResult = {
+    providerSubscriptionId: string
+    cancelledAt: string | null
+}
+
 export interface BillingProvider {
     readonly name: BillingProviderName
     ensureCustomer(input: EnsureBillingCustomerInput): Promise<EnsureBillingCustomerResult>
     createCheckoutSession(input: CreateBillingCheckoutSessionInput): Promise<CreateBillingCheckoutSessionResult>
+    getCheckoutSessionUrl(sessionId: string): Promise<string | null>
     ensureCatalogPrice(input: EnsureBillingCatalogPriceInput): Promise<EnsureBillingCatalogPriceResult>
+    cancelSubscription(input: CancelBillingSubscriptionInput): Promise<CancelBillingSubscriptionResult>
 }
-

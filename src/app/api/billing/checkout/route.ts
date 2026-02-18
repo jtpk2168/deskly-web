@@ -1,10 +1,18 @@
 import { NextRequest } from 'next/server'
-import { BILLING_CHECKOUT_CANCEL_URL, BILLING_CHECKOUT_SUCCESS_URL, BILLING_DEFAULT_CURRENCY, BILLING_MINIMUM_TERM_MONTHS, BILLING_STRIPE_AUTOMATIC_TAX } from '@/lib/billing/config'
+import { createHash } from 'node:crypto'
+import {
+    BILLING_CHECKOUT_CANCEL_URL,
+    BILLING_CHECKOUT_SUCCESS_URL,
+    BILLING_DEFAULT_CURRENCY,
+    BILLING_MINIMUM_TERM_MONTHS,
+    BILLING_STRIPE_AUTOMATIC_TAX,
+    BILLING_STRIPE_TAX_RATE_ID,
+} from '@/lib/billing/config'
 import { calculateCommitmentEndDate, parseOptionalIsoDate } from '@/lib/billing/commitment'
 import { toMoney } from '@/lib/billing/money'
-import { getBillingProvider } from '@/lib/billing/providers'
+import { getBillingProvider, getBillingProviderByName } from '@/lib/billing/providers'
 import { calculateSstQuote } from '@/lib/billing/tax'
-import { BillingCheckoutRequest, NormalizedBillingCheckoutItem } from '@/lib/billing/types'
+import { BillingCheckoutRequest, BillingProviderName, BillingTaxQuote, NormalizedBillingCheckoutItem } from '@/lib/billing/types'
 import { hasText, parseCheckoutItems, parseOptionalMoney, parseOptionalPositiveInteger, parseUUID } from '@/lib/billing/validation'
 import { errorResponse, successResponse } from '../../../../../lib/apiResponse'
 import { supabaseServer } from '../../../../../lib/supabaseServer'
@@ -39,6 +47,27 @@ type BillingCatalogPriceRecord = {
     provider_price_id: string
     unit_amount: number | string
 }
+
+type DeliverySnapshotRecord = {
+    companyName: string | null
+    address: string | null
+    city: string | null
+    zipPostal: string | null
+    contactName: string | null
+    contactPhone: string | null
+}
+
+type IdempotentSubscriptionRecord = {
+    id: string
+    status: string | null
+    billing_provider: string | null
+    provider_checkout_session_id: string | null
+    checkout_request_fingerprint: string | null
+    [key: string]: unknown
+}
+
+const AUTO_IDEMPOTENCY_WINDOW_MS = 15 * 60 * 1000
+const MAX_IDEMPOTENCY_KEY_LENGTH = 120
 
 function normalizeCurrency(value: unknown) {
     if (typeof value !== 'string') return BILLING_DEFAULT_CURRENCY
@@ -120,6 +149,150 @@ function getMissingProfileFields(
     if (!hasText(company.industry)) missingFields.push('Industry')
     if (!hasText(company.team_size)) missingFields.push('Team Size')
 
+    return missingFields
+}
+
+function parseOptionalText(value: unknown) {
+    if (typeof value !== 'string') return null
+    const normalized = value.trim()
+    return normalized.length > 0 ? normalized : null
+}
+
+function parseIdempotencyKey(value: unknown) {
+    if (typeof value !== 'string') return null
+    const normalized = value.trim()
+    if (!normalized) return null
+    return normalized
+}
+
+function deriveCheckoutFingerprint(input: {
+    userId: string
+    bundleId: string | null
+    startDateIso: string
+    commitmentEndDateIso: string
+    currency: string
+    minimumTermMonths: number
+    delivery: DeliverySnapshotRecord
+    items: NormalizedBillingCheckoutItem[]
+}) {
+    const normalizedItems = [...input.items]
+        .map((item) => ({
+            product_id: item.product_id,
+            product_name: item.product_name.trim(),
+            category: item.category?.trim() ?? null,
+            monthly_price: Number(item.monthly_price.toFixed(2)),
+            duration_months: item.duration_months,
+            quantity: item.quantity,
+        }))
+        .sort((a, b) => {
+            const aKey = `${a.product_id ?? ''}:${a.product_name}:${a.monthly_price}:${a.duration_months ?? ''}:${a.quantity}`
+            const bKey = `${b.product_id ?? ''}:${b.product_name}:${b.monthly_price}:${b.duration_months ?? ''}:${b.quantity}`
+            return aKey.localeCompare(bKey)
+        })
+
+    const payload = {
+        user_id: input.userId,
+        bundle_id: input.bundleId,
+        start_date: input.startDateIso,
+        end_date: input.commitmentEndDateIso,
+        currency: input.currency,
+        minimum_term_months: input.minimumTermMonths,
+        delivery_company_name: input.delivery.companyName?.trim() ?? null,
+        delivery_address: input.delivery.address?.trim() ?? null,
+        delivery_city: input.delivery.city?.trim() ?? null,
+        delivery_zip_postal: input.delivery.zipPostal?.trim() ?? null,
+        delivery_contact_name: input.delivery.contactName?.trim() ?? null,
+        delivery_contact_phone: input.delivery.contactPhone?.trim() ?? null,
+        items: normalizedItems,
+    }
+
+    return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
+}
+
+function deriveAutoIdempotencyKey(fingerprint: string) {
+    const windowBucket = Math.floor(Date.now() / AUTO_IDEMPOTENCY_WINDOW_MS)
+    return `auto:${windowBucket}:${fingerprint.slice(0, 48)}`
+}
+
+function isUniqueViolation(error: { code?: string } | null | undefined) {
+    return error?.code === '23505'
+}
+
+function normalizeBillingProvider(value: string | null | undefined): BillingProviderName {
+    return value === 'stripe' ? 'stripe' : 'mock'
+}
+
+async function resolveIdempotentReplayResponse(
+    existing: IdempotentSubscriptionRecord,
+    requestedFingerprint: string,
+    taxQuote: BillingTaxQuote,
+) {
+    const fingerprint = existing.checkout_request_fingerprint?.trim() || null
+    if (fingerprint && fingerprint !== requestedFingerprint) {
+        return errorResponse('This idempotency key was already used with different checkout details.', 409)
+    }
+
+    const sessionId = existing.provider_checkout_session_id?.trim() || null
+    const status = existing.status ?? null
+    const provider = normalizeBillingProvider(existing.billing_provider)
+
+    if (!sessionId && (status === 'pending_payment' || status === 'pending' || status === 'incomplete')) {
+        return errorResponse('Checkout is still being created. Please retry in a few seconds.', 409)
+    }
+
+    if (!sessionId && status === 'payment_failed') {
+        return errorResponse('Previous checkout attempt failed. Retry by starting a new checkout.', 409)
+    }
+
+    let checkoutUrl: string | null = null
+    if (sessionId) {
+        try {
+            const billingProvider = getBillingProviderByName(provider)
+            checkoutUrl = await billingProvider.getCheckoutSessionUrl(sessionId)
+        } catch {
+            checkoutUrl = null
+        }
+    }
+
+    return successResponse({
+        subscription: existing,
+        checkout_url: checkoutUrl,
+        checkout_session_id: sessionId,
+        billing_provider: provider,
+        tax_quote: taxQuote,
+        idempotent_replay: true,
+    })
+}
+
+function resolveDeliverySnapshot(
+    body: BillingCheckoutRequest,
+    profile: ProfileEligibilityRecord | null,
+    company: CompanyEligibilityRecord | null,
+): DeliverySnapshotRecord {
+    return {
+        companyName: parseOptionalText(body.delivery_company_name) ?? company?.company_name ?? null,
+        address: parseOptionalText(body.delivery_address)
+            ?? (hasText(company?.delivery_address) ? company?.delivery_address : company?.address)
+            ?? null,
+        city: parseOptionalText(body.delivery_city)
+            ?? (hasText(company?.delivery_city) ? company?.delivery_city : company?.office_city)
+            ?? null,
+        zipPostal: parseOptionalText(body.delivery_zip_postal)
+            ?? (hasText(company?.delivery_zip_postal) ? company?.delivery_zip_postal : company?.office_zip_postal)
+            ?? null,
+        contactName: parseOptionalText(body.delivery_contact_name) ?? profile?.full_name ?? null,
+        contactPhone: parseOptionalText(body.delivery_contact_phone) ?? profile?.phone_number ?? null,
+    }
+}
+
+function getMissingDeliverySnapshotFields(delivery: DeliverySnapshotRecord) {
+    const missingFields: string[] = []
+    if (!hasText(delivery.companyName)) missingFields.push('Company Name')
+    if (!hasText(delivery.address)) missingFields.push('Delivery Address')
+    if (!hasText(delivery.city)) missingFields.push('Delivery City')
+    if (!hasText(delivery.zipPostal)) missingFields.push('Delivery Zip / Postal')
+    if (!hasText(delivery.contactName)) missingFields.push('Site Contact Name')
+    if (!hasText(delivery.contactPhone)) missingFields.push('Site Contact Phone')
     return missingFields
 }
 
@@ -221,11 +394,60 @@ export async function POST(request: NextRequest) {
             return errorResponse(`Failed to validate company profile: ${companyLookupError.message}`, 500)
         }
 
-        const missingProfileFields = getMissingProfileFields(profile as ProfileEligibilityRecord | null, company as CompanyEligibilityRecord | null, authUserData.user.email ?? null)
+        const profileRecord = (profile as ProfileEligibilityRecord | null) ?? null
+        const companyRecord = (company as CompanyEligibilityRecord | null) ?? null
+
+        const missingProfileFields = getMissingProfileFields(profileRecord, companyRecord, authUserData.user.email ?? null)
         if (missingProfileFields.length > 0) {
             return errorResponse(
                 `Complete your profile before placing an order. Missing: ${missingProfileFields.join(', ')}`,
                 403,
+            )
+        }
+
+        const deliverySnapshot = resolveDeliverySnapshot(body, profileRecord, companyRecord)
+        const missingDeliverySnapshotFields = getMissingDeliverySnapshotFields(deliverySnapshot)
+        if (missingDeliverySnapshotFields.length > 0) {
+            return errorResponse(
+                `Delivery details are incomplete. Missing: ${missingDeliverySnapshotFields.join(', ')}`,
+                400,
+            )
+        }
+
+        const requestedIdempotencyKey = parseIdempotencyKey(body.idempotency_key)
+            ?? parseIdempotencyKey(request.headers.get('x-idempotency-key'))
+
+        if (requestedIdempotencyKey && requestedIdempotencyKey.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+            return errorResponse(`idempotency_key must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`, 400)
+        }
+
+        const checkoutRequestFingerprint = deriveCheckoutFingerprint({
+            userId: userUuid,
+            bundleId: bundleUuid,
+            startDateIso,
+            commitmentEndDateIso,
+            currency,
+            minimumTermMonths,
+            delivery: deliverySnapshot,
+            items: normalizedItems,
+        })
+        const checkoutIdempotencyKey = requestedIdempotencyKey ?? deriveAutoIdempotencyKey(checkoutRequestFingerprint)
+
+        const { data: existingIdempotentSubscription, error: existingIdempotentSubscriptionError } = await supabaseServer
+            .from('subscriptions')
+            .select('*')
+            .eq('checkout_idempotency_key', checkoutIdempotencyKey)
+            .maybeSingle()
+
+        if (existingIdempotentSubscriptionError) {
+            return errorResponse(`Failed to resolve checkout idempotency state: ${existingIdempotentSubscriptionError.message}`, 500)
+        }
+
+        if (existingIdempotentSubscription) {
+            return resolveIdempotentReplayResponse(
+                existingIdempotentSubscription as IdempotentSubscriptionRecord,
+                checkoutRequestFingerprint,
+                taxQuote,
             )
         }
 
@@ -245,12 +467,12 @@ export async function POST(request: NextRequest) {
             const ensuredCustomer = await billingProvider.ensureCustomer({
                 externalUserId: userUuid,
                 email: authUserData.user.email ?? null,
-                name: profile?.full_name ?? null,
-                phone: profile?.phone_number ?? null,
+                name: deliverySnapshot.contactName ?? profileRecord?.full_name ?? null,
+                phone: deliverySnapshot.contactPhone ?? profileRecord?.phone_number ?? null,
                 address: {
-                    line1: company?.delivery_address ?? company?.address ?? null,
-                    city: company?.delivery_city ?? company?.office_city ?? null,
-                    postal_code: company?.delivery_zip_postal ?? company?.office_zip_postal ?? null,
+                    line1: deliverySnapshot.address,
+                    city: deliverySnapshot.city,
+                    postal_code: deliverySnapshot.zipPostal,
                     country: 'MY',
                 },
                 metadata: {
@@ -322,11 +544,39 @@ export async function POST(request: NextRequest) {
                 billing_provider: billingProvider.name,
                 billing_customer_id: billingCustomer.id,
                 billing_currency: currency,
+                checkout_idempotency_key: checkoutIdempotencyKey,
+                checkout_request_fingerprint: checkoutRequestFingerprint,
+                delivery_company_name: deliverySnapshot.companyName,
+                delivery_address: deliverySnapshot.address,
+                delivery_city: deliverySnapshot.city,
+                delivery_zip_postal: deliverySnapshot.zipPostal,
+                delivery_contact_name: deliverySnapshot.contactName,
+                delivery_contact_phone: deliverySnapshot.contactPhone,
             })
             .select()
             .single()
 
         if (createSubscriptionError || !createdSubscription) {
+            if (isUniqueViolation(createSubscriptionError)) {
+                const { data: replaySubscription, error: replaySubscriptionError } = await supabaseServer
+                    .from('subscriptions')
+                    .select('*')
+                    .eq('checkout_idempotency_key', checkoutIdempotencyKey)
+                    .maybeSingle()
+
+                if (replaySubscriptionError) {
+                    return errorResponse(`Failed to resolve existing idempotent checkout: ${replaySubscriptionError.message}`, 500)
+                }
+
+                if (replaySubscription) {
+                    return resolveIdempotentReplayResponse(
+                        replaySubscription as IdempotentSubscriptionRecord,
+                        checkoutRequestFingerprint,
+                        taxQuote,
+                    )
+                }
+            }
+
             return errorResponse(`Failed to create subscription: ${createSubscriptionError?.message ?? 'Unknown error'}`, 500)
         }
 
@@ -367,6 +617,14 @@ export async function POST(request: NextRequest) {
             return errorResponse('Stripe checkout URLs are not configured. Set BILLING_CHECKOUT_SUCCESS_URL and BILLING_CHECKOUT_CANCEL_URL.', 500)
         }
 
+        if (billingProvider.name === 'stripe' && !BILLING_STRIPE_AUTOMATIC_TAX && !BILLING_STRIPE_TAX_RATE_ID) {
+            await supabaseServer
+                .from('subscriptions')
+                .update({ status: 'payment_failed' })
+                .eq('id', createdSubscription.id)
+            return errorResponse('Stripe tax is not configured. Set BILLING_STRIPE_TAX_RATE_ID (or enable BILLING_STRIPE_AUTOMATIC_TAX).', 500)
+        }
+
         let checkoutSession: {
             checkoutUrl: string | null
             sessionId: string | null
@@ -378,6 +636,7 @@ export async function POST(request: NextRequest) {
                 customerId: billingCustomer.provider_customer_id,
                 currency,
                 automaticTax: BILLING_STRIPE_AUTOMATIC_TAX,
+                manualTaxRateId: BILLING_STRIPE_AUTOMATIC_TAX ? null : BILLING_STRIPE_TAX_RATE_ID,
                 minimumTermMonths,
                 successUrl: successUrl ?? 'https://example.com/billing/success',
                 cancelUrl: cancelUrl ?? 'https://example.com/billing/cancel',

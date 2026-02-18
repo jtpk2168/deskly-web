@@ -6,6 +6,7 @@ import {
     LayoutDashboard,
     Package,
     ShoppingCart,
+    ReceiptText,
     Users,
     Settings,
     LogOut
@@ -15,6 +16,7 @@ const menuItems = [
     { name: 'Dashboard', href: '/admin', icon: LayoutDashboard },
     { name: 'Products', href: '/admin/products', icon: Package },
     { name: 'Orders', href: '/admin/orders', icon: ShoppingCart },
+    { name: 'Invoices', href: '/admin/invoices', icon: ReceiptText },
     { name: 'Customers', href: '/admin/customers', icon: Users },
     { name: 'Admins', href: '/admin/admins', icon: Users },
     { name: 'Settings', href: '/admin/settings', icon: Settings },

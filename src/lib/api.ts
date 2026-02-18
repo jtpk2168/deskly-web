@@ -69,6 +69,8 @@ export type AdminOrderDetail = {
     bundleId: string | null
     status: AdminOrderStatus | null
     total: number | null
+    subtotalAmount: number | null
+    taxAmount: number | null
     createdAt: string
     startDate: string | null
     endDate: string | null
@@ -90,6 +92,8 @@ export type AdminOrderDetail = {
         industry: string | null
         teamSize: string | null
         address: string | null
+        officeAddress: string | null
+        deliveryAddress: string | null
     }
     bundle: {
         id: string | null
@@ -118,6 +122,8 @@ export type AdminUser = {
 export type BillingProviderName = 'mock' | 'stripe'
 export type BillingWebhookEventStatus = 'received' | 'processed' | 'failed'
 export type BillingWebhookEventProvider = BillingProviderName
+export type BillingInvoiceStatus = 'draft' | 'open' | 'paid' | 'payment_failed' | 'void' | 'uncollectible' | 'unknown'
+export type BillingInvoiceProvider = BillingProviderName
 
 export type BillingRuntimeConfig = {
     provider: BillingProviderName | string
@@ -125,6 +131,7 @@ export type BillingRuntimeConfig = {
     minimum_term_months: number
     sst_rate: number
     stripe_automatic_tax_enabled: boolean
+    stripe_manual_tax_rate_id?: string | null
 }
 
 export type BillingCatalogSyncPayload = {
@@ -168,6 +175,53 @@ export type BillingWebhookEventFilters = PaginationQuery & {
     status?: BillingWebhookEventStatus | 'all'
     provider?: BillingWebhookEventProvider | 'all'
     search?: string
+}
+
+export type BillingInvoice = {
+    id: string
+    provider: BillingInvoiceProvider
+    provider_invoice_id: string
+    provider_subscription_id: string | null
+    subscription_id: string | null
+    invoice_number: string | null
+    status: BillingInvoiceStatus
+    currency: string
+    subtotal_amount: number | null
+    tax_amount: number | null
+    total_amount: number | null
+    amount_paid: number | null
+    amount_due: number | null
+    hosted_invoice_url: string | null
+    invoice_pdf: string | null
+    due_date: string | null
+    paid_at: string | null
+    period_start_at: string | null
+    period_end_at: string | null
+    created_at: string
+}
+
+export type BillingInvoiceFilters = PaginationQuery & {
+    status?: BillingInvoiceStatus | 'all'
+    provider?: BillingInvoiceProvider | 'all'
+    search?: string
+}
+
+export type BillingInvoiceBackfillPayload = {
+    limit?: number
+    dry_run?: boolean
+}
+
+export type BillingInvoiceBackfillResult = {
+    provider: BillingInvoiceProvider | string
+    dry_run: boolean
+    requested_limit: number
+    fetched_count: number
+    mirrored_count: number
+    linked_subscription_count: number
+    linked_billing_customer_count: number
+    unresolved_invoice_ids: string[]
+    unresolved_total: number
+    has_more_available: boolean
 }
 
 export type ProductUpsertPayload = {
@@ -258,6 +312,14 @@ function buildOrderQueryParams(filters: AdminOrderFilters = {}) {
 }
 
 function buildBillingWebhookEventQueryParams(filters: BillingWebhookEventFilters = {}) {
+    const params = buildPaginationParams(filters)
+    if (filters.search?.trim()) params.set('search', filters.search.trim())
+    if (filters.status && filters.status !== 'all') params.set('status', filters.status)
+    if (filters.provider && filters.provider !== 'all') params.set('provider', filters.provider)
+    return params
+}
+
+function buildBillingInvoiceQueryParams(filters: BillingInvoiceFilters = {}) {
     const params = buildPaginationParams(filters)
     if (filters.search?.trim()) params.set('search', filters.search.trim())
     if (filters.status && filters.status !== 'all') params.set('status', filters.status)
@@ -413,6 +475,24 @@ export async function getBillingWebhookEvents(filters: BillingWebhookEventFilter
     const qs = params.toString()
     const res = await fetch(`/api/admin/billing/webhook-events${qs ? `?${qs}` : ''}`, { cache: 'no-store' })
     return parsePaginatedResponse<BillingWebhookEvent>(res)
+}
+
+export async function getBillingInvoices(filters: BillingInvoiceFilters = {}): Promise<PaginatedResult<BillingInvoice>> {
+    const params = buildBillingInvoiceQueryParams(filters)
+    const qs = params.toString()
+    const res = await fetch(`/api/admin/billing/invoices${qs ? `?${qs}` : ''}`, { cache: 'no-store' })
+    return parsePaginatedResponse<BillingInvoice>(res)
+}
+
+export async function backfillBillingInvoices(payload: BillingInvoiceBackfillPayload = {}): Promise<BillingInvoiceBackfillResult> {
+    const res = await fetch('/api/admin/billing/invoices/backfill', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    })
+    return parseResponse<BillingInvoiceBackfillResult>(res)
 }
 
 // Admins

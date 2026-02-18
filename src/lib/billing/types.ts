@@ -37,8 +37,15 @@ export type BillingCheckoutRequest = {
     product_name?: unknown
     currency?: unknown
     minimum_term_months?: unknown
+    idempotency_key?: unknown
     success_url?: unknown
     cancel_url?: unknown
+    delivery_company_name?: unknown
+    delivery_address?: unknown
+    delivery_city?: unknown
+    delivery_zip_postal?: unknown
+    delivery_contact_name?: unknown
+    delivery_contact_phone?: unknown
     items?: unknown
 }
 
@@ -49,4 +56,3 @@ export type BillingTaxQuote = {
     total: number
     currency: string
 }
-

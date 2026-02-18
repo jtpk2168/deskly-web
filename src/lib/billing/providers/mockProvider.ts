@@ -28,6 +28,11 @@ export class MockBillingProvider implements BillingProvider {
         }
     }
 
+    async getCheckoutSessionUrl(sessionId: string) {
+        void sessionId
+        return null
+    }
+
     async ensureCatalogPrice(input: Parameters<BillingProvider['ensureCatalogPrice']>[0]) {
         const providerProductId = input.existingProviderProductId
             ?? hashId('mock_prod', `${input.internalProductId}:${input.name}`)
@@ -39,6 +44,13 @@ export class MockBillingProvider implements BillingProvider {
             unitAmount: toMoney(input.monthlyUnitAmount),
             interval: 'month' as const,
             intervalCount: 1,
+        }
+    }
+
+    async cancelSubscription(input: Parameters<BillingProvider['cancelSubscription']>[0]) {
+        return {
+            providerSubscriptionId: input.providerSubscriptionId,
+            cancelledAt: new Date().toISOString(),
         }
     }
 }

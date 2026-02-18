@@ -38,6 +38,6 @@ export const BILLING_DEFAULT_CURRENCY = (process.env.BILLING_DEFAULT_CURRENCY ??
 export const BILLING_MINIMUM_TERM_MONTHS = parsePositiveInteger(process.env.BILLING_MINIMUM_TERM_MONTHS, FALLBACK_MINIMUM_TERM_MONTHS)
 export const BILLING_SST_RATE = parseSstRate(process.env.BILLING_SST_RATE, FALLBACK_SST_RATE)
 export const BILLING_STRIPE_AUTOMATIC_TAX = parseBoolean(process.env.BILLING_STRIPE_AUTOMATIC_TAX, true)
+export const BILLING_STRIPE_TAX_RATE_ID = process.env.BILLING_STRIPE_TAX_RATE_ID?.trim() || null
 export const BILLING_CHECKOUT_SUCCESS_URL = process.env.BILLING_CHECKOUT_SUCCESS_URL?.trim() || null
 export const BILLING_CHECKOUT_CANCEL_URL = process.env.BILLING_CHECKOUT_CANCEL_URL?.trim() || null
-
