@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { DatabaseZap, ExternalLink, ReceiptText, RefreshCw } from 'lucide-react'
+import { DatabaseZap, ExternalLink, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { DataTable } from '@/components/ui/DataTable'
 import { PaginationControls } from '@/components/ui/PaginationControls'
@@ -44,6 +44,20 @@ function formatCurrency(value: number | null, currency: string) {
     return `${currency.toUpperCase()} ${value.toFixed(2)}`
 }
 
+function formatInvoicePeriod(periodStartAt: string | null, periodEndAt: string | null) {
+    if (!periodStartAt && !periodEndAt) return '-'
+
+    const start = formatDateTime(periodStartAt)
+    const end = formatDateTime(periodEndAt)
+
+    if (start === '-' && end === '-') return '-'
+    if (start === end) return start
+    if (start === '-') return end
+    if (end === '-') return start
+
+    return `${start} -> ${end}`
+}
+
 function getProviderVariant(provider: string): 'default' | 'success' | 'warning' | 'error' | 'outline' {
     if (provider === 'stripe') return 'outline'
     if (provider === 'mock') return 'default'
@@ -77,6 +91,10 @@ export default function InvoicesPage() {
     const [isBackfilling, setIsBackfilling] = useState(false)
     const [backfillResult, setBackfillResult] = useState<BillingInvoiceBackfillResult | null>(null)
     const [backfillError, setBackfillError] = useState<string | null>(null)
+    const hasCustomFilters =
+        invoicesSearch.trim().length > 0 ||
+        invoicesProviderFilter !== 'all' ||
+        invoicesStatusFilter !== 'all'
 
     const loadInvoices = useCallback(async () => {
         setInvoicesLoading(true)
@@ -122,6 +140,13 @@ export default function InvoicesPage() {
         }
     }, [backfillLimit, loadInvoices])
 
+    const resetInvoiceFilters = () => {
+        setInvoicesSearch('')
+        setInvoicesProviderFilter('all')
+        setInvoicesStatusFilter('all')
+        setInvoicesPage(1)
+    }
+
     const invoiceColumns: Array<{
         header: string
         accessorKey?: keyof BillingInvoice
@@ -164,12 +189,10 @@ export default function InvoicesPage() {
             header: 'Period',
             accessorKey: 'period_start_at',
             cell: (row) => {
-                const start = formatDateTime(row.period_start_at)
-                const end = formatDateTime(row.period_end_at)
-                if (start === '-' && end === '-') return '-'
+                const period = formatInvoicePeriod(row.period_start_at, row.period_end_at)
                 return (
                     <span className="text-xs text-text-light">
-                        {start} {'->'} {end}
+                        {period}
                     </span>
                 )
             },
@@ -235,81 +258,91 @@ export default function InvoicesPage() {
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                    <ReceiptText className="h-6 w-6 text-primary" />
-                    <h1 className="text-2xl font-bold text-text-light">Invoices</h1>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                    <label className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light">
-                        Fetch
-                        <input
-                            type="number"
-                            min={1}
-                            max={1000}
-                            value={backfillLimit}
-                            onChange={(event) => {
-                                const parsed = Number(event.target.value)
-                                if (!Number.isInteger(parsed) || parsed <= 0) {
-                                    setBackfillLimit(1)
-                                    return
-                                }
-                                setBackfillLimit(Math.min(1000, parsed))
-                            }}
-                            className="w-20 rounded border border-gray-300 px-2 py-1 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40"
-                        />
-                    </label>
-                    <button
-                        type="button"
-                        onClick={() => void handleBackfill()}
-                        className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-60"
-                        disabled={isBackfilling}
-                    >
-                        <DatabaseZap className={`h-4 w-4 ${isBackfilling ? 'animate-spin' : ''}`} />
-                        {isBackfilling ? 'Backfilling...' : 'Backfill Old Invoices'}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => void loadInvoices()}
-                        className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-text-light hover:bg-gray-50"
-                        disabled={invoicesLoading}
-                    >
-                        <RefreshCw className={`h-4 w-4 ${invoicesLoading ? 'animate-spin' : ''}`} />
-                        Refresh
-                    </button>
-                </div>
-            </div>
+            <section className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="pointer-events-none absolute -right-14 -top-14 h-44 w-44 rounded-full bg-primary/10 blur-3xl" />
+                <div className="relative">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Billing</p>
+                            <h1 className="mt-1 text-2xl font-bold text-text-light">Invoices</h1>
+                            <p className="mt-1 text-sm text-subtext-light">Read-only mirrored invoice records from billing providers.</p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => void loadInvoices()}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50"
+                            disabled={invoicesLoading}
+                        >
+                            <RefreshCw className={`h-4 w-4 ${invoicesLoading ? 'animate-spin' : ''}`} />
+                            Refresh
+                        </button>
+                    </div>
 
-            <section className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-                <p className="mb-4 text-sm text-subtext-light">
-                    Read-only invoice records synced from billing webhooks.
-                </p>
+                </div>
+            </section>
 
-                <div className="mb-4 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900">
-                    Use <strong>Backfill Old Invoices</strong> to import historical Stripe invoices created before webhook mirroring was enabled.
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-lg font-semibold text-text-light">Backfill Historical Invoices</h2>
+                        <p className="mt-1 text-sm text-subtext-light">
+                            Import invoices created before webhook mirroring was enabled. Backfill uses your configured provider and appends invoice records safely.
+                        </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <label className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-text-light">
+                            Fetch
+                            <input
+                                type="number"
+                                min={1}
+                                max={1000}
+                                value={backfillLimit}
+                                onChange={(event) => {
+                                    const parsed = Number(event.target.value)
+                                    if (!Number.isInteger(parsed) || parsed <= 0) {
+                                        setBackfillLimit(1)
+                                        return
+                                    }
+                                    setBackfillLimit(Math.min(1000, parsed))
+                                }}
+                                className="w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40"
+                            />
+                        </label>
+                        <button
+                            type="button"
+                            onClick={() => void handleBackfill()}
+                            className="inline-flex items-center gap-2 rounded-xl bg-primary px-3 py-2 text-sm font-medium text-white transition hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={isBackfilling}
+                        >
+                            <DatabaseZap className={`h-4 w-4 ${isBackfilling ? 'animate-spin' : ''}`} />
+                            {isBackfilling ? 'Backfilling...' : 'Backfill Old Invoices'}
+                        </button>
+                    </div>
                 </div>
 
                 {backfillError ? (
-                    <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{backfillError}</div>
+                    <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{backfillError}</div>
                 ) : null}
 
                 {backfillResult ? (
-                    <div className="mb-4 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
+                    <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
                         Imported {backfillResult.mirrored_count} of {backfillResult.fetched_count} fetched invoice(s).
                         {' '}Linked subscriptions: {backfillResult.linked_subscription_count}.
                         {' '}Unresolved: {backfillResult.unresolved_total}.
                         {backfillResult.has_more_available ? ' More historical invoices are available. Increase fetch size and run again.' : ''}
                     </div>
                 ) : null}
+            </section>
 
-                <div className="mb-4 grid gap-3 md:grid-cols-4">
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                <div className="mb-4 grid gap-3 md:grid-cols-[2fr_1fr_1fr_auto]">
                     <input
                         value={invoicesSearch}
                         onChange={(event) => {
                             setInvoicesSearch(event.target.value)
                             setInvoicesPage(1)
                         }}
-                        className="rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40 md:col-span-2"
+                        className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40"
                         placeholder="Search invoice id, number, subscription..."
                     />
                     <select
@@ -318,7 +351,7 @@ export default function InvoicesPage() {
                             setInvoicesProviderFilter(event.target.value as 'all' | BillingInvoiceProvider)
                             setInvoicesPage(1)
                         }}
-                        className="rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40"
+                        className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40"
                     >
                         {INVOICE_PROVIDER_FILTER_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>{option.label}</option>
@@ -330,33 +363,43 @@ export default function InvoicesPage() {
                             setInvoicesStatusFilter(event.target.value as 'all' | BillingInvoiceStatus)
                             setInvoicesPage(1)
                         }}
-                        className="rounded-md border border-gray-300 px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40"
+                        className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40"
                     >
                         {INVOICE_STATUS_FILTER_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>{option.label}</option>
                         ))}
                     </select>
+                    <button
+                        type="button"
+                        onClick={resetInvoiceFilters}
+                        disabled={!hasCustomFilters}
+                        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Reset
+                    </button>
                 </div>
 
                 {invoicesError ? (
-                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{invoicesError}</div>
+                    <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{invoicesError}</div>
                 ) : null}
                 {invoicesLoading ? (
                     <p className="mb-3 text-sm text-subtext-light">Loading mirrored invoices...</p>
                 ) : null}
 
-                <DataTable columns={invoiceColumns} data={invoices} />
-                <PaginationControls
-                    page={invoicesPage}
-                    limit={invoicesLimit}
-                    total={invoicesTotal}
-                    loading={invoicesLoading}
-                    onPageChange={setInvoicesPage}
-                    onLimitChange={(nextLimit) => {
-                        setInvoicesLimit(nextLimit)
-                        setInvoicesPage(1)
-                    }}
-                />
+                <div className="space-y-4">
+                    <DataTable columns={invoiceColumns} data={invoices} />
+                    <PaginationControls
+                        page={invoicesPage}
+                        limit={invoicesLimit}
+                        total={invoicesTotal}
+                        loading={invoicesLoading}
+                        onPageChange={setInvoicesPage}
+                        onLimitChange={(nextLimit) => {
+                            setInvoicesLimit(nextLimit)
+                            setInvoicesPage(1)
+                        }}
+                    />
+                </div>
             </section>
         </div>
     )

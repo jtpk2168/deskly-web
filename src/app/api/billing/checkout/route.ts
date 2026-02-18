@@ -580,6 +580,21 @@ export async function POST(request: NextRequest) {
             return errorResponse(`Failed to create subscription: ${createSubscriptionError?.message ?? 'Unknown error'}`, 500)
         }
 
+        const { error: createDeliveryOrderError } = await supabaseServer
+            .from('delivery_orders')
+            .insert({
+                subscription_id: createdSubscription.id,
+                do_status: 'confirmed',
+            })
+
+        if (createDeliveryOrderError && createDeliveryOrderError.code !== '23505') {
+            await supabaseServer
+                .from('subscriptions')
+                .update({ status: 'payment_failed' })
+                .eq('id', createdSubscription.id)
+            return errorResponse(`Failed to initialize delivery order: ${createDeliveryOrderError.message}`, 500)
+        }
+
         const { error: insertItemsError } = await supabaseServer
             .from('subscription_items')
             .insert(

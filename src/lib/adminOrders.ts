@@ -7,6 +7,7 @@ export type AdminOrderSortColumn = (typeof ADMIN_ORDER_SORT_COLUMNS)[number]
 export type AdminOrderFilters = {
     search: string | null
     status: AdminOrderStatus | null
+    userId: string | null
     sortBy: AdminOrderSortColumn
     sortDir: 'asc' | 'desc'
 }
@@ -26,15 +27,18 @@ export function normalizeOrderStatus(input: string | null | undefined): AdminOrd
 export function parseAdminOrderFilters(searchParams: URLSearchParams): AdminOrderFilters {
     const searchRaw = searchParams.get('search')
     const statusRaw = searchParams.get('status')
+    const userIdRaw = searchParams.get('user_id')
     const sortByRaw = searchParams.get('sort_by')
     const sortDirRaw = searchParams.get('sort_dir')
 
     const search = searchRaw?.trim() ? searchRaw.trim() : null
     const status = statusRaw ? normalizeOrderStatus(statusRaw) : null
+    const userId = userIdRaw?.trim() ? userIdRaw.trim() : null
 
     return {
         search,
         status,
+        userId,
         sortBy: ADMIN_ORDER_SORT_COLUMNS.includes(sortByRaw as AdminOrderSortColumn)
             ? (sortByRaw as AdminOrderSortColumn)
             : 'created_at',
@@ -47,6 +51,10 @@ export function applyAdminOrderFilters<T extends OrderQueryBuilder>(query: T, fi
 
     if (filters.status) {
         nextQuery = nextQuery.eq('status', filters.status) as T
+    }
+
+    if (filters.userId) {
+        nextQuery = nextQuery.eq('user_id', filters.userId) as T
     }
 
     return nextQuery

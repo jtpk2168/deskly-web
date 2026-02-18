@@ -59,6 +59,7 @@ export type AdminOrderSortColumn = 'created_at' | 'monthly_total' | 'status'
 export type AdminOrderFilters = PaginationQuery & {
     search?: string
     status?: AdminOrderStatus | 'all'
+    userId?: string
     sortBy?: AdminOrderSortColumn
     sortDir?: 'asc' | 'desc'
 }
@@ -106,9 +107,139 @@ export type AdminOrderDetail = {
 
 export type AdminOrderUpdatePayload = {
     status?: AdminOrderStatus
+    billing_status?: AdminOrderStatus
     start_date?: string | null
     end_date?: string | null
     monthly_total?: number | null
+}
+
+export type AdminSubscription = {
+    id: string
+    customer: string
+    items: string
+    total: number | null
+    billing_status: AdminOrderStatus | null
+    status: AdminOrderStatus | null
+    date: string
+}
+
+export type AdminSubscriptionDetail = {
+    id: string
+    userId: string
+    bundleId: string | null
+    billingStatus: AdminOrderStatus | null
+    status: AdminOrderStatus | null
+    total: number | null
+    subtotalAmount: number | null
+    taxAmount: number | null
+    createdAt: string
+    startDate: string | null
+    endDate: string | null
+    serviceState: string | null
+    collectionStatus: string | null
+    firstDeliveryAt: string | null
+    itemsSummary: string
+    items: Array<{
+        productName: string
+        category: string | null
+        monthlyPrice: number | null
+        durationMonths: number | null
+        quantity: number
+        imageUrl: string | null
+    }>
+    customer: {
+        id: string | null
+        name: string | null
+        phoneNumber: string | null
+        jobTitle: string | null
+        companyName: string | null
+        industry: string | null
+        teamSize: string | null
+        address: string | null
+        officeAddress: string | null
+        deliveryAddress: string | null
+    }
+    bundle: {
+        id: string | null
+        name: string | null
+        description: string | null
+        imageUrl: string | null
+        monthlyPrice: number | null
+    }
+}
+
+export type DeliveryOrderStatus =
+    | 'confirmed'
+    | 'dispatched'
+    | 'delivered'
+    | 'partially_delivered'
+    | 'failed'
+    | 'rescheduled'
+    | 'cancelled'
+
+export type DeliveryOrderSortColumn = 'created_at' | 'updated_at' | 'do_status'
+
+export type AdminDeliveryOrderFilters = PaginationQuery & {
+    search?: string
+    status?: DeliveryOrderStatus | 'all'
+    subscriptionId?: string
+    sortBy?: DeliveryOrderSortColumn
+    sortDir?: 'asc' | 'desc'
+}
+
+export type AdminDeliveryOrder = {
+    id: string
+    subscription_id: string
+    customer: string
+    items: string
+    do_status: DeliveryOrderStatus
+    billing_status: AdminOrderStatus | null
+    service_state: string | null
+    collection_status: string | null
+    date: string
+}
+
+export type AdminDeliveryOrderDetail = {
+    id: string
+    subscription_id: string
+    do_status: DeliveryOrderStatus
+    failure_reason: string | null
+    rescheduled_at: string | null
+    cancelled_reason: string | null
+    created_at: string
+    updated_at: string
+    subscription: {
+        id: string
+        user_id: string
+        customer_name: string
+        billing_status: AdminOrderStatus | null
+        status: AdminOrderStatus | null
+        monthly_total: number | null
+        start_date: string | null
+        end_date: string | null
+        service_state: string | null
+        collection_status: string | null
+        first_delivery_at: string | null
+        delivery: {
+            company_name: string | null
+            contact_name: string | null
+            contact_phone: string | null
+            address: string | null
+        }
+        items_summary: string
+        items: Array<{
+            name: string
+            category: string | null
+            quantity: number
+        }>
+    } | null
+}
+
+export type AdminDeliveryOrderUpdatePayload = {
+    do_status: DeliveryOrderStatus
+    failure_reason?: string | null
+    rescheduled_at?: string | null
+    cancelled_reason?: string | null
 }
 
 export type AdminUser = {
@@ -117,6 +248,43 @@ export type AdminUser = {
     email: string
     role: 'Admin' | 'Customer'
     joinedDate: string
+}
+
+export type CustomerProfile = {
+    id: string
+    full_name: string | null
+    job_title: string | null
+    phone_number: string | null
+    marketing_consent?: boolean | null
+    company: {
+        profile_id: string
+        company_name: string | null
+        registration_number: string | null
+        address: string | null
+        office_city: string | null
+        office_zip_postal: string | null
+        delivery_address: string | null
+        delivery_city: string | null
+        delivery_zip_postal: string | null
+        industry: string | null
+        team_size: string | null
+    } | null
+}
+
+export type AdminDashboardOrder = {
+    id: string
+    customerName: string
+    itemName: string
+    status: string | null
+    createdAt: string
+}
+
+export type AdminDashboard = {
+    totalRevenue: number
+    activeRentals: number
+    totalProducts: number
+    totalUsers: number
+    recentOrders: AdminDashboardOrder[]
 }
 
 export type BillingProviderName = 'mock' | 'stripe'
@@ -305,6 +473,19 @@ function buildOrderQueryParams(filters: AdminOrderFilters = {}) {
 
     if (filters.search?.trim()) params.set('search', filters.search.trim())
     if (filters.status && filters.status !== 'all') params.set('status', filters.status)
+    if (filters.userId?.trim()) params.set('user_id', filters.userId.trim())
+    if (filters.sortBy) params.set('sort_by', filters.sortBy)
+    if (filters.sortDir) params.set('sort_dir', filters.sortDir)
+
+    return params
+}
+
+function buildDeliveryOrderQueryParams(filters: AdminDeliveryOrderFilters = {}) {
+    const params = buildPaginationParams(filters)
+
+    if (filters.search?.trim()) params.set('search', filters.search.trim())
+    if (filters.status && filters.status !== 'all') params.set('status', filters.status)
+    if (filters.subscriptionId?.trim()) params.set('subscription_id', filters.subscriptionId.trim())
     if (filters.sortBy) params.set('sort_by', filters.sortBy)
     if (filters.sortDir) params.set('sort_dir', filters.sortDir)
 
@@ -339,6 +520,12 @@ export async function fetchAdminData(endpoint: string) {
         console.error(`Error fetching ${endpoint}:`, error)
         return []
     }
+}
+
+// Dashboard
+export async function getAdminDashboard(): Promise<AdminDashboard> {
+    const res = await fetch('/api/admin/dashboard', { cache: 'no-store' })
+    return parseResponse<AdminDashboard>(res)
 }
 
 // Products
@@ -429,28 +616,108 @@ export async function createProduct(productData: ProductUpsertPayload) {
     return createAdminProduct(productData)
 }
 
-// Orders (Subscriptions)
-export async function getOrders(query: AdminOrderFilters = {}): Promise<PaginatedResult<AdminOrder>> {
+// Subscriptions (Monetary)
+export async function getAdminSubscriptions(query: AdminOrderFilters = {}): Promise<PaginatedResult<AdminSubscription>> {
     const params = buildOrderQueryParams(query)
     const qs = params.toString()
-    const res = await fetch(`/api/admin/orders${qs ? `?${qs}` : ''}`, { cache: 'no-store' })
-    return parsePaginatedResponse<AdminOrder>(res)
+    const res = await fetch(`/api/admin/subscriptions${qs ? `?${qs}` : ''}`, { cache: 'no-store' })
+    return parsePaginatedResponse<AdminSubscription>(res)
 }
 
-export async function getOrder(id: string): Promise<AdminOrderDetail> {
-    const res = await fetch(`/api/admin/orders/${id}`, { cache: 'no-store' })
-    return parseResponse<AdminOrderDetail>(res)
+export async function getAdminSubscription(id: string): Promise<AdminSubscriptionDetail> {
+    const res = await fetch(`/api/admin/subscriptions/${id}`, { cache: 'no-store' })
+    return parseResponse<AdminSubscriptionDetail>(res)
 }
 
-export async function updateOrder(id: string, payload: AdminOrderUpdatePayload): Promise<AdminOrderDetail> {
-    const res = await fetch(`/api/admin/orders/${id}`, {
+export async function updateAdminSubscription(id: string, payload: AdminOrderUpdatePayload): Promise<AdminSubscriptionDetail> {
+    const res = await fetch(`/api/admin/subscriptions/${id}`, {
         method: 'PATCH',
         headers: {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
     })
-    return parseResponse<AdminOrderDetail>(res)
+    return parseResponse<AdminSubscriptionDetail>(res)
+}
+
+// Backward-compatible aliases used by existing order UI code paths.
+export async function getOrders(query: AdminOrderFilters = {}): Promise<PaginatedResult<AdminOrder>> {
+    const result = await getAdminSubscriptions(query)
+    return {
+        ...result,
+        items: result.items.map((item) => ({
+            id: item.id,
+            customer: item.customer,
+            items: item.items,
+            total: item.total,
+            status: item.billing_status,
+            date: item.date,
+        })),
+    }
+}
+
+export async function getOrder(id: string): Promise<AdminOrderDetail> {
+    const detail = await getAdminSubscription(id)
+    return {
+        id: detail.id,
+        userId: detail.userId,
+        bundleId: detail.bundleId,
+        status: detail.billingStatus,
+        total: detail.total,
+        subtotalAmount: detail.subtotalAmount,
+        taxAmount: detail.taxAmount,
+        createdAt: detail.createdAt,
+        startDate: detail.startDate,
+        endDate: detail.endDate,
+        itemsSummary: detail.itemsSummary,
+        items: detail.items,
+        customer: detail.customer,
+        bundle: detail.bundle,
+    }
+}
+
+export async function updateOrder(id: string, payload: AdminOrderUpdatePayload): Promise<AdminOrderDetail> {
+    const detail = await updateAdminSubscription(id, payload)
+    return {
+        id: detail.id,
+        userId: detail.userId,
+        bundleId: detail.bundleId,
+        status: detail.billingStatus,
+        total: detail.total,
+        subtotalAmount: detail.subtotalAmount,
+        taxAmount: detail.taxAmount,
+        createdAt: detail.createdAt,
+        startDate: detail.startDate,
+        endDate: detail.endDate,
+        itemsSummary: detail.itemsSummary,
+        items: detail.items,
+        customer: detail.customer,
+        bundle: detail.bundle,
+    }
+}
+
+// Delivery Orders (Fulfillment)
+export async function getDeliveryOrders(filters: AdminDeliveryOrderFilters = {}): Promise<PaginatedResult<AdminDeliveryOrder>> {
+    const params = buildDeliveryOrderQueryParams(filters)
+    const qs = params.toString()
+    const res = await fetch(`/api/admin/delivery-orders${qs ? `?${qs}` : ''}`, { cache: 'no-store' })
+    return parsePaginatedResponse<AdminDeliveryOrder>(res)
+}
+
+export async function getDeliveryOrder(id: string): Promise<AdminDeliveryOrderDetail> {
+    const res = await fetch(`/api/admin/delivery-orders/${id}`, { cache: 'no-store' })
+    return parseResponse<AdminDeliveryOrderDetail>(res)
+}
+
+export async function updateDeliveryOrder(id: string, payload: AdminDeliveryOrderUpdatePayload): Promise<AdminDeliveryOrderDetail> {
+    const res = await fetch(`/api/admin/delivery-orders/${id}`, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    })
+    return parseResponse<AdminDeliveryOrderDetail>(res)
 }
 
 // Billing
@@ -527,4 +794,11 @@ export async function deleteCustomer(userId: string) {
         throw new Error(errorText || 'Failed to delete customer')
     }
     return res.json()
+}
+
+export async function getCustomerProfile(userId: string): Promise<CustomerProfile> {
+    const params = new URLSearchParams()
+    params.set('user_id', userId)
+    const res = await fetch(`/api/profile?${params.toString()}`, { cache: 'no-store' })
+    return parseResponse<CustomerProfile>(res)
 }

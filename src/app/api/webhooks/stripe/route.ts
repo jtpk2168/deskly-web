@@ -165,21 +165,32 @@ function resolveInvoicePeriodTimestamps(eventObject: Record<string, unknown>) {
     const directPeriodStart = readNumber(eventObject.period_start)
     const directPeriodEnd = readNumber(eventObject.period_end)
 
-    if (directPeriodStart != null || directPeriodEnd != null) {
-        return {
-            periodStartAt: parseIsoFromUnixTimestamp(directPeriodStart),
-            periodEndAt: parseIsoFromUnixTimestamp(directPeriodEnd),
+    const lines = readRecord(eventObject.lines)
+    const linesData = Array.isArray(lines?.data) ? lines.data : []
+    let linePeriodStart: number | null = null
+    let linePeriodEnd: number | null = null
+
+    for (const line of linesData) {
+        const lineRecord = readRecord(line)
+        const linePeriod = readRecord(lineRecord?.period)
+        const start = readNumber(linePeriod?.start)
+        const end = readNumber(linePeriod?.end)
+
+        if (start != null && (linePeriodStart == null || start < linePeriodStart)) {
+            linePeriodStart = start
+        }
+
+        if (end != null && (linePeriodEnd == null || end > linePeriodEnd)) {
+            linePeriodEnd = end
         }
     }
 
-    const lines = readRecord(eventObject.lines)
-    const linesData = Array.isArray(lines?.data) ? lines.data : []
-    const firstLine = readRecord(linesData[0])
-    const linePeriod = readRecord(firstLine?.period)
+    const resolvedPeriodStart = linePeriodStart ?? directPeriodStart
+    const resolvedPeriodEnd = linePeriodEnd ?? directPeriodEnd
 
     return {
-        periodStartAt: parseIsoFromUnixTimestamp(readNumber(linePeriod?.start)),
-        periodEndAt: parseIsoFromUnixTimestamp(readNumber(linePeriod?.end)),
+        periodStartAt: parseIsoFromUnixTimestamp(resolvedPeriodStart),
+        periodEndAt: parseIsoFromUnixTimestamp(resolvedPeriodEnd),
     }
 }
 

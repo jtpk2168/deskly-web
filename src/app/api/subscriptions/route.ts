@@ -332,6 +332,17 @@ export async function POST(request: NextRequest) {
 
         if (error) return errorResponse(error.message, 500)
 
+        const { error: createDeliveryOrderError } = await supabaseServer
+            .from('delivery_orders')
+            .insert({
+                subscription_id: data.id,
+                do_status: 'confirmed',
+            })
+
+        if (createDeliveryOrderError && createDeliveryOrderError.code !== '23505') {
+            return errorResponse(`Failed to initialize delivery order: ${createDeliveryOrderError.message}`, 500)
+        }
+
         if (parsedItems.items.length > 0) {
             const { error: itemsError } = await supabaseServer
                 .from('subscription_items')
