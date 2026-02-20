@@ -67,14 +67,17 @@ export type EnsureBillingCatalogPriceResult = {
     intervalCount: number
 }
 
-export type CancelBillingSubscriptionInput = {
+export type BillingSubscriptionActionInput = {
     providerSubscriptionId: string
     reason?: string
 }
 
-export type CancelBillingSubscriptionResult = {
+export type BillingSubscriptionSnapshot = {
     providerSubscriptionId: string
+    providerStatus: string | null
+    currentPeriodEnd: string | null
     cancelledAt: string | null
+    cancelAtPeriodEnd: boolean
 }
 
 export interface BillingProvider {
@@ -83,5 +86,6 @@ export interface BillingProvider {
     createCheckoutSession(input: CreateBillingCheckoutSessionInput): Promise<CreateBillingCheckoutSessionResult>
     getCheckoutSessionUrl(sessionId: string): Promise<string | null>
     ensureCatalogPrice(input: EnsureBillingCatalogPriceInput): Promise<EnsureBillingCatalogPriceResult>
-    cancelSubscription(input: CancelBillingSubscriptionInput): Promise<CancelBillingSubscriptionResult>
+    cancelNow(input: BillingSubscriptionActionInput): Promise<BillingSubscriptionSnapshot>
+    cancelAtPeriodEnd(input: BillingSubscriptionActionInput): Promise<BillingSubscriptionSnapshot>
 }

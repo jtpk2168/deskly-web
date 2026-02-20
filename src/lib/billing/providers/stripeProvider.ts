@@ -26,6 +26,10 @@ function readOptionalUnixTimestamp(value: unknown) {
     return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function readOptionalBoolean(value: unknown) {
+    return typeof value === 'boolean' ? value : null
+}
+
 function appendMetadata(params: URLSearchParams, prefix: string, metadata?: Record<string, string>) {
     if (!metadata) return
     for (const [key, value] of Object.entries(metadata)) {
@@ -77,6 +81,27 @@ async function stripePost(path: string, params: URLSearchParams) {
 
 async function stripeGet(path: string, params?: URLSearchParams) {
     return stripeRequest('GET', path, params)
+}
+
+function toIsoTimestamp(timestamp: number | null) {
+    if (timestamp == null) return null
+    return new Date(timestamp * 1000).toISOString()
+}
+
+function toSubscriptionSnapshot(subscription: StripeJson, fallbackProviderSubscriptionId: string) {
+    const providerSubscriptionId = readOptionalString(subscription.id) ?? fallbackProviderSubscriptionId
+    const providerStatus = readOptionalString(subscription.status)
+    const currentPeriodEnd = toIsoTimestamp(readOptionalUnixTimestamp(subscription.current_period_end))
+    const cancelledAt = toIsoTimestamp(readOptionalUnixTimestamp(subscription.canceled_at))
+    const cancelAtPeriodEnd = readOptionalBoolean(subscription.cancel_at_period_end) ?? false
+
+    return {
+        providerSubscriptionId,
+        providerStatus,
+        currentPeriodEnd,
+        cancelledAt,
+        cancelAtPeriodEnd,
+    }
 }
 
 export class StripeBillingProvider implements BillingProvider {
@@ -198,7 +223,7 @@ export class StripeBillingProvider implements BillingProvider {
         return readString(createdProduct.id, 'product.id')
     }
 
-    async cancelSubscription(input: Parameters<BillingProvider['cancelSubscription']>[0]) {
+    async cancelNow(input: Parameters<BillingProvider['cancelNow']>[0]) {
         const normalizedSubscriptionId = input.providerSubscriptionId.trim()
         if (!normalizedSubscriptionId) {
             throw new Error('Stripe provider subscription ID is required')
@@ -211,14 +236,23 @@ export class StripeBillingProvider implements BillingProvider {
             cancelParams,
         )
 
-        const cancelledAtUnix = readOptionalUnixTimestamp(cancelledSubscription.canceled_at)
-        const cancelledAtIso = cancelledAtUnix == null
-            ? null
-            : new Date(cancelledAtUnix * 1000).toISOString()
+        return toSubscriptionSnapshot(cancelledSubscription, normalizedSubscriptionId)
+    }
 
-        return {
-            providerSubscriptionId: readOptionalString(cancelledSubscription.id) ?? normalizedSubscriptionId,
-            cancelledAt: cancelledAtIso,
+    async cancelAtPeriodEnd(input: Parameters<BillingProvider['cancelAtPeriodEnd']>[0]) {
+        const normalizedSubscriptionId = input.providerSubscriptionId.trim()
+        if (!normalizedSubscriptionId) {
+            throw new Error('Stripe provider subscription ID is required')
         }
+
+        const params = new URLSearchParams()
+        params.set('cancel_at_period_end', 'true')
+
+        const updatedSubscription = await stripePost(
+            `/subscriptions/${encodeURIComponent(normalizedSubscriptionId)}`,
+            params,
+        )
+
+        return toSubscriptionSnapshot(updatedSubscription, normalizedSubscriptionId)
     }
 }

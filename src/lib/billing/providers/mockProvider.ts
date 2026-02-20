@@ -10,6 +10,10 @@ function hashId(prefix: string, input: string) {
 export class MockBillingProvider implements BillingProvider {
     readonly name = 'mock' as const
 
+    private unsupportedBillingAction(): never {
+        throw new Error('Billing actions are only supported for Stripe subscriptions')
+    }
+
     async ensureCustomer(input: Parameters<BillingProvider['ensureCustomer']>[0]) {
         const seed = `${input.externalUserId}:${input.email ?? ''}`
         return { providerCustomerId: hashId('mock_cus', seed) }
@@ -47,10 +51,13 @@ export class MockBillingProvider implements BillingProvider {
         }
     }
 
-    async cancelSubscription(input: Parameters<BillingProvider['cancelSubscription']>[0]) {
-        return {
-            providerSubscriptionId: input.providerSubscriptionId,
-            cancelledAt: new Date().toISOString(),
-        }
+    async cancelNow(_input: Parameters<BillingProvider['cancelNow']>[0]): ReturnType<BillingProvider['cancelNow']> {
+        void _input
+        return this.unsupportedBillingAction()
+    }
+
+    async cancelAtPeriodEnd(_input: Parameters<BillingProvider['cancelAtPeriodEnd']>[0]): ReturnType<BillingProvider['cancelAtPeriodEnd']> {
+        void _input
+        return this.unsupportedBillingAction()
     }
 }

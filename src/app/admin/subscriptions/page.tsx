@@ -1,7 +1,7 @@
 'use client'
 
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
-import { Eye, Pencil, X } from 'lucide-react'
+import { Eye, X } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { DataTable } from '@/components/ui/DataTable'
 import { Badge } from '@/components/ui/Badge'
@@ -9,23 +9,20 @@ import { PaginationControls } from '@/components/ui/PaginationControls'
 import {
     AdminOrderSortColumn,
     AdminOrderStatus,
-    AdminOrderUpdatePayload,
+    AdminSubscriptionAction,
     AdminSubscription,
     AdminSubscriptionDetail,
     getAdminSubscription,
     getAdminSubscriptions,
-    updateAdminSubscription,
+    runAdminSubscriptionAction,
 } from '@/lib/api'
 
 function getStatusVariant(status: string | null): 'default' | 'success' | 'warning' | 'error' | 'outline' {
     const normalizedStatus = status?.toLowerCase()
     if (normalizedStatus === 'active') return 'success'
-    if (normalizedStatus === 'pending') return 'warning'
     if (normalizedStatus === 'pending_payment') return 'warning'
     if (normalizedStatus === 'payment_failed') return 'error'
-    if (normalizedStatus === 'incomplete') return 'warning'
     if (normalizedStatus === 'cancelled') return 'error'
-    if (normalizedStatus === 'completed') return 'outline'
     return 'default'
 }
 
@@ -53,30 +50,13 @@ function formatId(value: string) {
     return normalized.slice(0, 8)
 }
 
-function toDateInputValue(value: string | null) {
-    if (!value) return ''
-    const matches = value.match(/^(\d{4}-\d{2}-\d{2})/)
-    if (matches?.[1]) return matches[1]
-    const parsed = new Date(value)
-    if (Number.isNaN(parsed.getTime())) return ''
-    return parsed.toISOString().slice(0, 10)
-}
-
 const STATUS_FILTER_OPTIONS: Array<{ value: 'all' | AdminOrderStatus; label: string }> = [
     { value: 'all', label: 'All Status' },
-    { value: 'pending', label: 'Pending' },
     { value: 'pending_payment', label: 'Pending Payment' },
-    { value: 'incomplete', label: 'Incomplete' },
     { value: 'payment_failed', label: 'Payment Failed' },
     { value: 'active', label: 'Active' },
-    { value: 'completed', label: 'Completed' },
     { value: 'cancelled', label: 'Cancelled' },
 ]
-
-function normalizeStatus(status: AdminOrderStatus | null | undefined): AdminOrderStatus {
-    if (status && STATUS_FILTER_OPTIONS.some((option) => option.value === status)) return status
-    return 'pending'
-}
 
 function getSortIndicator(activeSortBy: AdminOrderSortColumn, activeSortDir: 'asc' | 'desc', column: AdminOrderSortColumn) {
     if (activeSortBy !== column) return '↕'
@@ -98,13 +78,8 @@ export default function SubscriptionsPage() {
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
     const [selectedSubscriptionId, setSelectedSubscriptionId] = useState<string | null>(null)
     const [selectedSubscription, setSelectedSubscription] = useState<AdminSubscriptionDetail | null>(null)
-    const [detailMode, setDetailMode] = useState<'view' | 'edit'>('view')
-    const [billingStatusDraft, setBillingStatusDraft] = useState<AdminOrderStatus>('pending')
-    const [subscriptionMonthlyRateDraft, setSubscriptionMonthlyRateDraft] = useState('')
-    const [subscriptionStartDateDraft, setSubscriptionStartDateDraft] = useState('')
-    const [subscriptionEndDateDraft, setSubscriptionEndDateDraft] = useState('')
     const [detailLoading, setDetailLoading] = useState(false)
-    const [detailSaving, setDetailSaving] = useState(false)
+    const [billingActionLoading, setBillingActionLoading] = useState<AdminSubscriptionAction | null>(null)
     const [detailError, setDetailError] = useState<string | null>(null)
     const [userIdFilter, setUserIdFilter] = useState<string | null>(() => searchParams.get('user_id')?.trim() || null)
     const [customerFilterLabel, setCustomerFilterLabel] = useState<string | null>(() => searchParams.get('customer')?.trim() || null)
@@ -146,29 +121,20 @@ export default function SubscriptionsPage() {
     const closeDetails = useCallback(() => {
         setSelectedSubscriptionId(null)
         setSelectedSubscription(null)
-        setDetailMode('view')
         setDetailLoading(false)
-        setDetailSaving(false)
+        setBillingActionLoading(null)
         setDetailError(null)
-        setBillingStatusDraft('pending')
-        setSubscriptionMonthlyRateDraft('')
-        setSubscriptionStartDateDraft('')
-        setSubscriptionEndDateDraft('')
     }, [])
 
-    const openDetails = useCallback(async (subscriptionId: string, mode: 'view' | 'edit') => {
+    const openDetails = useCallback(async (subscriptionId: string) => {
         setSelectedSubscriptionId(subscriptionId)
         setSelectedSubscription(null)
-        setDetailMode(mode)
+        setBillingActionLoading(null)
         setDetailError(null)
         setDetailLoading(true)
         try {
             const details = await getAdminSubscription(subscriptionId)
             setSelectedSubscription(details)
-            setBillingStatusDraft(normalizeStatus(details.billingStatus))
-            setSubscriptionMonthlyRateDraft(details.total == null ? '' : details.total.toFixed(2))
-            setSubscriptionStartDateDraft(toDateInputValue(details.startDate))
-            setSubscriptionEndDateDraft(toDateInputValue(details.endDate))
         } catch (loadError) {
             setDetailError(loadError instanceof Error ? loadError.message : 'Failed to load subscription details')
         } finally {
@@ -176,71 +142,31 @@ export default function SubscriptionsPage() {
         }
     }, [])
 
-    const saveDetails = useCallback(async () => {
+    const executeBillingAction = useCallback(async (action: AdminSubscriptionAction) => {
         if (!selectedSubscriptionId || !selectedSubscription) return
-        setDetailSaving(true)
+        const actionLabel = action === 'cancel_now' ? 'cancel now' : 'cancel at period end'
+        const confirmed = confirm(`Are you sure you want to ${actionLabel} for this Stripe subscription?`)
+        if (!confirmed) return
+
+        setBillingActionLoading(action)
         setDetailError(null)
 
         try {
-            const updatePayload: AdminOrderUpdatePayload = {}
-
-            if (billingStatusDraft !== normalizeStatus(selectedSubscription.billingStatus)) {
-                updatePayload.billing_status = billingStatusDraft
-            }
-
-            const trimmedMonthlyRate = subscriptionMonthlyRateDraft.trim()
-            const nextMonthlyRate = trimmedMonthlyRate === '' ? null : Number(trimmedMonthlyRate)
-            if (trimmedMonthlyRate !== '') {
-                if (nextMonthlyRate == null || !Number.isFinite(nextMonthlyRate) || nextMonthlyRate < 0) {
-                    setDetailError('Monthly rate must be a valid number greater than or equal to 0')
-                    setDetailSaving(false)
-                    return
-                }
-            }
-
-            const currentMonthlyRate = selectedSubscription.total == null ? null : Number(selectedSubscription.total.toFixed(2))
-            const normalizedNextMonthlyRate = nextMonthlyRate == null ? null : Number(nextMonthlyRate.toFixed(2))
-            if (normalizedNextMonthlyRate !== currentMonthlyRate) {
-                updatePayload.monthly_total = normalizedNextMonthlyRate
-            }
-
-            const currentStartDate = toDateInputValue(selectedSubscription.startDate)
-            if (subscriptionStartDateDraft !== currentStartDate) {
-                updatePayload.start_date = subscriptionStartDateDraft || null
-            }
-
-            const currentEndDate = toDateInputValue(selectedSubscription.endDate)
-            if (subscriptionEndDateDraft !== currentEndDate) {
-                updatePayload.end_date = subscriptionEndDateDraft || null
-            }
-
-            if (Object.keys(updatePayload).length === 0) {
-                setDetailMode('view')
-                setDetailSaving(false)
-                return
-            }
-
-            const updated = await updateAdminSubscription(selectedSubscriptionId, updatePayload)
-            setSelectedSubscription(updated)
-            setBillingStatusDraft(normalizeStatus(updated.billingStatus))
-            setSubscriptionMonthlyRateDraft(updated.total == null ? '' : updated.total.toFixed(2))
-            setSubscriptionStartDateDraft(toDateInputValue(updated.startDate))
-            setSubscriptionEndDateDraft(toDateInputValue(updated.endDate))
-            setDetailMode('view')
-            await loadData()
-        } catch (saveError) {
-            setDetailError(saveError instanceof Error ? saveError.message : 'Failed to update subscription')
+            await runAdminSubscriptionAction(selectedSubscriptionId, action)
+            const [refreshedDetails] = await Promise.all([
+                getAdminSubscription(selectedSubscriptionId),
+                loadData(),
+            ])
+            setSelectedSubscription(refreshedDetails)
+        } catch (actionError) {
+            setDetailError(actionError instanceof Error ? actionError.message : 'Failed to run billing action')
         } finally {
-            setDetailSaving(false)
+            setBillingActionLoading(null)
         }
     }, [
-        billingStatusDraft,
         loadData,
         selectedSubscription,
         selectedSubscriptionId,
-        subscriptionEndDateDraft,
-        subscriptionMonthlyRateDraft,
-        subscriptionStartDateDraft,
     ])
 
     const handleInlineSort = useCallback((column: AdminOrderSortColumn) => {
@@ -299,19 +225,11 @@ export default function SubscriptionsPage() {
         <div className="flex items-center justify-end gap-2">
             <button
                 type="button"
-                onClick={() => void openDetails(row.id, 'view')}
+                onClick={() => void openDetails(row.id)}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-subtext-light transition hover:border-primary/40 hover:text-primary"
                 aria-label={`View subscription ${formatId(row.id)}`}
             >
                 <Eye className="h-4 w-4" />
-            </button>
-            <button
-                type="button"
-                onClick={() => void openDetails(row.id, 'edit')}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-subtext-light transition hover:border-primary/40 hover:text-primary"
-                aria-label={`Edit subscription ${formatId(row.id)}`}
-            >
-                <Pencil className="h-4 w-4" />
             </button>
         </div>
     )
@@ -325,7 +243,7 @@ export default function SubscriptionsPage() {
                         <div>
                             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Subscriptions</p>
                             <h1 className="mt-1 text-2xl font-bold text-text-light">Billing Subscriptions</h1>
-                            <p className="mt-1 text-sm text-subtext-light">Manage subscription monetary lifecycle, pricing, and dates.</p>
+                            <p className="mt-1 text-sm text-subtext-light">Review Stripe-synced billing state and run safe billing actions.</p>
                         </div>
                         <button
                             type="button"
@@ -445,7 +363,7 @@ export default function SubscriptionsPage() {
                             <div className="flex items-start justify-between gap-4">
                                 <div>
                                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-subtext-light">
-                                        {detailMode === 'edit' ? 'Edit Subscription' : 'Subscription Details'}
+                                        Subscription Details
                                     </p>
                                     <h2 className="mt-1 text-3xl font-bold tracking-tight text-text-light">
                                         #{formatId(selectedSubscriptionId)}
@@ -589,108 +507,30 @@ export default function SubscriptionsPage() {
                                         </div>
                                     </div>
 
-                                    {detailMode === 'edit' ? (
-                                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                                            <div className="mb-4 flex items-center justify-between gap-2">
-                                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Edit Billing Details</p>
-                                                <p className="text-xs text-subtext-light">Changes apply immediately after saving.</p>
-                                            </div>
-
-                                            <div className="grid gap-4 sm:grid-cols-2">
-                                                <div>
-                                                    <label htmlFor="subscription-monthly-rate" className="block text-xs uppercase tracking-wide text-subtext-light">
-                                                        Monthly Rate
-                                                    </label>
-                                                    <input
-                                                        id="subscription-monthly-rate"
-                                                        type="number"
-                                                        min={0}
-                                                        step="0.01"
-                                                        value={subscriptionMonthlyRateDraft}
-                                                        onChange={(event) => setSubscriptionMonthlyRateDraft(event.target.value)}
-                                                        className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/50"
-                                                        placeholder="0.00"
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label htmlFor="subscription-status" className="block text-xs uppercase tracking-wide text-subtext-light">
-                                                        Billing Status
-                                                    </label>
-                                                    <select
-                                                        id="subscription-status"
-                                                        value={billingStatusDraft}
-                                                        onChange={(event) => setBillingStatusDraft(event.target.value as AdminOrderStatus)}
-                                                        className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/50"
-                                                    >
-                                                        {STATUS_FILTER_OPTIONS.filter((option) => option.value !== 'all').map((option) => (
-                                                            <option key={option.value} value={option.value}>
-                                                                {option.label}
-                                                            </option>
-                                                        ))}
-                                                    </select>
-                                                </div>
-                                                <div>
-                                                    <label htmlFor="subscription-start-date" className="block text-xs uppercase tracking-wide text-subtext-light">
-                                                        Start Date
-                                                    </label>
-                                                    <input
-                                                        id="subscription-start-date"
-                                                        type="date"
-                                                        value={subscriptionStartDateDraft}
-                                                        onChange={(event) => setSubscriptionStartDateDraft(event.target.value)}
-                                                        className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/50"
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label htmlFor="subscription-end-date" className="block text-xs uppercase tracking-wide text-subtext-light">
-                                                        End Date
-                                                    </label>
-                                                    <input
-                                                        id="subscription-end-date"
-                                                        type="date"
-                                                        value={subscriptionEndDateDraft}
-                                                        onChange={(event) => setSubscriptionEndDateDraft(event.target.value)}
-                                                        className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/50"
-                                                    />
-                                                </div>
-                                            </div>
-
-                                            <div className="mt-5 flex justify-end gap-2">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setDetailMode('view')
-                                                        setBillingStatusDraft(normalizeStatus(selectedSubscription.billingStatus))
-                                                        setSubscriptionMonthlyRateDraft(selectedSubscription.total == null ? '' : selectedSubscription.total.toFixed(2))
-                                                        setSubscriptionStartDateDraft(toDateInputValue(selectedSubscription.startDate))
-                                                        setSubscriptionEndDateDraft(toDateInputValue(selectedSubscription.endDate))
-                                                    }}
-                                                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light hover:bg-slate-50"
-                                                >
-                                                    Cancel
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void saveDetails()}
-                                                    disabled={detailSaving}
-                                                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50"
-                                                >
-                                                    {detailSaving ? 'Saving...' : 'Save Changes'}
-                                                </button>
-                                            </div>
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                        <div className="mb-4 flex items-center justify-between gap-2">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Billing Actions</p>
+                                            <p className="text-xs text-subtext-light">Billing fields are read-only and synced from Stripe.</p>
                                         </div>
-                                    ) : (
-                                        <div className="flex justify-end">
+                                        <div className="flex flex-wrap gap-2">
                                             <button
                                                 type="button"
-                                                onClick={() => setDetailMode('edit')}
-                                                className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-dark"
+                                                onClick={() => void executeBillingAction('cancel_now')}
+                                                disabled={billingActionLoading != null}
+                                                className="rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                                             >
-                                                <Pencil className="h-4 w-4" />
-                                                Edit Billing Details
+                                                {billingActionLoading === 'cancel_now' ? 'Cancelling...' : 'Cancel Now'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => void executeBillingAction('cancel_at_period_end')}
+                                                disabled={billingActionLoading != null}
+                                                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {billingActionLoading === 'cancel_at_period_end' ? 'Scheduling...' : 'Cancel At Period End'}
                                             </button>
                                         </div>
-                                    )}
+                                    </div>
                                 </div>
                             ) : (
                                 <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">

@@ -1,19 +1,27 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../../../lib/apiResponse'
-import { normalizeOrderStatus } from '@/lib/adminOrders'
 import { getBillingProviderByName } from '@/lib/billing/providers'
-import { BillingProviderName } from '@/lib/billing/types'
+import { BillingProviderName, normalizeBillingStatus } from '@/lib/billing/types'
+import { mapStripeSubscriptionStatus } from '@/lib/billing/stripeWebhook'
+import { BILLING_FIELDS_READONLY_ERROR, hasLockedBillingFieldEdits } from '@/lib/billing/manualEditGuard'
 
 type RouteParams = { params: Promise<{ id: string }> }
 
-type CancellationReferenceRow = {
+const ADMIN_SUBSCRIPTION_ACTIONS = ['cancel_now', 'cancel_at_period_end'] as const
+type AdminSubscriptionAction = (typeof ADMIN_SUBSCRIPTION_ACTIONS)[number]
+
+type SubscriptionActionReferenceRow = {
     id: string
-    status: string | null
     billing_provider: BillingProviderName | string | null
     provider_subscription_id: string | null
-    commitment_end_at: string | null
-    end_date: string | null
+}
+
+function parseAdminSubscriptionAction(value: unknown): AdminSubscriptionAction | null {
+    if (typeof value !== 'string') return null
+    return ADMIN_SUBSCRIPTION_ACTIONS.includes(value as AdminSubscriptionAction)
+        ? (value as AdminSubscriptionAction)
+        : null
 }
 
 type SubscriptionRecord = {
@@ -194,19 +202,6 @@ async function resolveCustomerName(userId: string, profileName: string | null) {
     return `User ${userId.replace(/-/g, '').slice(0, 8).toUpperCase()}`
 }
 
-function parseNullableDate(input: unknown): string | null | undefined {
-    if (input === undefined) return undefined
-    if (input === null || input === '') return null
-    if (typeof input !== 'string') return undefined
-    const parsed = new Date(input)
-    if (Number.isNaN(parsed.getTime())) return undefined
-    return parsed.toISOString()
-}
-
-function normalizeBillingProvider(value: string | null | undefined): BillingProviderName {
-    return value === 'stripe' ? 'stripe' : 'mock'
-}
-
 async function markOffboardingRequested(subscriptionId: string) {
     const { data: existingFulfillment, error: existingFulfillmentError } = await supabaseServer
         .from('subscription_fulfillment')
@@ -368,13 +363,14 @@ async function fetchSubscriptionDetails(subscriptionId: string): Promise<Subscri
             .map(([label, qty]) => `${label} x ${qty}`)
             .join(', ')
         : fallbackItemsSummary
+    const normalizedStatus = normalizeBillingStatus(record.status)
 
     return {
         id: record.id,
         userId: record.user_id,
         bundleId: record.bundle_id,
-        billingStatus: record.status,
-        status: record.status,
+        billingStatus: normalizedStatus,
+        status: normalizedStatus,
         total: parseMoney(record.monthly_total),
         subtotalAmount: parseMoney(record.subtotal_amount),
         taxAmount: parseMoney(record.tax_amount),
@@ -423,7 +419,7 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     }
 }
 
-/** PATCH /api/admin/subscriptions/:id — Update subscription billing details */
+/** PATCH /api/admin/subscriptions/:id — Billing fields are Stripe-managed and cannot be edited manually */
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
     try {
         const { id } = await params
@@ -431,135 +427,128 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         if (!uuid) return errorResponse('Invalid subscription ID format', 400)
 
         const body = await request.json()
-        const updatePayload: Record<string, unknown> = {}
-        let requestedOffboarding = false
-
-        const incomingStatus = body?.billing_status ?? body?.status
-        if (incomingStatus !== undefined) {
-            const status = normalizeOrderStatus(incomingStatus)
-            if (!status) {
-                return errorResponse('Invalid status. Must be: active, pending, pending_payment, payment_failed, incomplete, cancelled, or completed', 400)
-            }
-
-            if (status === 'cancelled') {
-                const { data: cancellationReference, error: cancellationReferenceError } = await supabaseServer
-                    .from('subscriptions')
-                    .select('id, status, billing_provider, provider_subscription_id, commitment_end_at, end_date')
-                    .eq('id', uuid)
-                    .maybeSingle()
-
-                if (cancellationReferenceError) {
-                    return errorResponse(`Failed to validate cancellation state: ${cancellationReferenceError.message}`, 500)
-                }
-
-                if (!cancellationReference) {
-                    return errorResponse('Subscription not found', 404)
-                }
-
-                const reference = cancellationReference as CancellationReferenceRow
-                try {
-                    await markOffboardingRequested(uuid)
-                    requestedOffboarding = true
-                } catch (fulfillmentError) {
-                    const message = fulfillmentError instanceof Error
-                        ? fulfillmentError.message
-                        : 'Failed to update service state for cancellation request'
-                    return errorResponse(message, 500)
-                }
-
-                if (reference.status !== 'cancelled') {
-                    let deferBillingCancellation = false
-
-                    if (reference.commitment_end_at) {
-                        const commitmentEnd = new Date(reference.commitment_end_at)
-                        if (!Number.isNaN(commitmentEnd.getTime()) && commitmentEnd.getTime() > Date.now()) {
-                            deferBillingCancellation = true
-                            if (body?.end_date === undefined) {
-                                updatePayload.end_date = commitmentEnd.toISOString()
-                            }
-                        }
-                    }
-
-                    if (!deferBillingCancellation) {
-                        const billingProvider = normalizeBillingProvider(reference.billing_provider)
-                        const providerSubscriptionId = reference.provider_subscription_id?.trim() || null
-                        if (billingProvider === 'stripe' && !providerSubscriptionId) {
-                            return errorResponse('Cannot cancel on Stripe because provider_subscription_id is missing', 409)
-                        }
-
-                        if (providerSubscriptionId) {
-                            try {
-                                const provider = getBillingProviderByName(billingProvider)
-                                const cancellation = await provider.cancelSubscription({
-                                    providerSubscriptionId,
-                                    reason: 'Cancelled by admin in Deskly',
-                                })
-
-                                if (body?.end_date === undefined && cancellation.cancelledAt) {
-                                    updatePayload.end_date = cancellation.cancelledAt
-                                }
-                            } catch (cancellationError) {
-                                const message = cancellationError instanceof Error
-                                    ? cancellationError.message
-                                    : 'Failed to cancel provider subscription'
-                                return errorResponse(message, 502)
-                            }
-                        }
-
-                        updatePayload.status = status
-                    }
-                }
-            } else {
-                updatePayload.status = status
-            }
+        if (hasLockedBillingFieldEdits(body)) {
+            return errorResponse(BILLING_FIELDS_READONLY_ERROR, 400)
         }
 
-        if (body?.start_date !== undefined) {
-            const startDate = parseNullableDate(body.start_date)
-            if (startDate === undefined) return errorResponse('start_date must be a valid date or null', 400)
-            updatePayload.start_date = startDate
+        return errorResponse('No editable fields are available on this endpoint.', 400)
+    } catch {
+        return errorResponse('Invalid request body', 400)
+    }
+}
+
+/** POST /api/admin/subscriptions/:id — Run Stripe-backed subscription billing actions */
+export async function POST(request: NextRequest, { params }: RouteParams) {
+    try {
+        const { id } = await params
+        const uuid = parseUUID(id)
+        if (!uuid) return errorResponse('Invalid subscription ID format', 400)
+
+        const body = await request.json()
+        if (hasLockedBillingFieldEdits(body)) {
+            return errorResponse(BILLING_FIELDS_READONLY_ERROR, 400)
         }
 
-        if (body?.end_date !== undefined) {
-            const endDate = parseNullableDate(body.end_date)
-            if (endDate === undefined) return errorResponse('end_date must be a valid date or null', 400)
-            updatePayload.end_date = endDate
+        const action = parseAdminSubscriptionAction(body?.action)
+        if (!action) {
+            return errorResponse('Invalid action. Must be: cancel_now or cancel_at_period_end', 400)
         }
 
-        if (body?.monthly_total !== undefined) {
-            if (body.monthly_total === null || body.monthly_total === '') {
-                updatePayload.monthly_total = null
-            } else {
-                const monthlyTotal = Number(body.monthly_total)
-                if (!Number.isFinite(monthlyTotal) || monthlyTotal < 0) {
-                    return errorResponse('monthly_total must be a number greater than or equal to 0', 400)
-                }
-                updatePayload.monthly_total = monthlyTotal
-            }
+        const { data: subscriptionReference, error: subscriptionReferenceError } = await supabaseServer
+            .from('subscriptions')
+            .select('id, billing_provider, provider_subscription_id')
+            .eq('id', uuid)
+            .maybeSingle()
+
+        if (subscriptionReferenceError) {
+            return errorResponse(`Failed to load subscription: ${subscriptionReferenceError.message}`, 500)
+        }
+        if (!subscriptionReference) {
+            return errorResponse('Subscription not found', 404)
         }
 
-        if (Object.keys(updatePayload).length === 0) {
-            if (!requestedOffboarding) {
-                return errorResponse('No valid fields to update', 400)
-            }
-
-            const details = await fetchSubscriptionDetails(uuid)
-            if (!details) return errorResponse('Subscription not found', 404)
-            return successResponse(details)
+        const reference = subscriptionReference as SubscriptionActionReferenceRow
+        if (reference.billing_provider !== 'stripe') {
+            return errorResponse('Billing actions are only supported for Stripe subscriptions', 400)
         }
 
-        const { data, error } = await supabaseServer
+        const providerSubscriptionId = reference.provider_subscription_id?.trim()
+        if (!providerSubscriptionId) {
+            return errorResponse('Cannot run Stripe billing action because provider_subscription_id is missing', 409)
+        }
+
+        const provider = getBillingProviderByName('stripe')
+        let stripeSnapshot: Awaited<ReturnType<typeof provider.cancelNow>>
+
+        try {
+            stripeSnapshot = action === 'cancel_now'
+                ? await provider.cancelNow({
+                    providerSubscriptionId,
+                    reason: 'Cancelled by admin in Deskly',
+                })
+                : await provider.cancelAtPeriodEnd({
+                    providerSubscriptionId,
+                    reason: 'Cancellation requested by admin in Deskly',
+                })
+        } catch (providerError) {
+            const message = providerError instanceof Error
+                ? providerError.message
+                : 'Stripe billing action failed'
+            return errorResponse(message, 502)
+        }
+
+        const mirroredStatus = stripeSnapshot.providerStatus
+            ? mapStripeSubscriptionStatus(stripeSnapshot.providerStatus)
+            : action === 'cancel_now'
+                ? 'cancelled'
+                : 'pending_payment'
+        const updatePayload: {
+            status: string
+            provider_subscription_id: string
+            end_date?: string | null
+        } = {
+            status: mirroredStatus,
+            provider_subscription_id: stripeSnapshot.providerSubscriptionId,
+        }
+
+        const mirroredEndDate = stripeSnapshot.cancelledAt ?? stripeSnapshot.currentPeriodEnd
+        if (mirroredEndDate !== null) {
+            updatePayload.end_date = mirroredEndDate
+        }
+
+        const { data: updatedSubscription, error: updateError } = await supabaseServer
             .from('subscriptions')
             .update(updatePayload)
             .eq('id', uuid)
             .select('id')
             .single()
 
-        if (error || !data) return errorResponse('Subscription not found or update failed', 404)
+        if (updateError || !updatedSubscription) {
+            return errorResponse(updateError?.message ?? 'Subscription not found or update failed', 500)
+        }
+
+        try {
+            await markOffboardingRequested(uuid)
+        } catch (fulfillmentError) {
+            const message = fulfillmentError instanceof Error
+                ? fulfillmentError.message
+                : 'Failed to update service state for cancellation request'
+            return errorResponse(message, 500)
+        }
 
         const details = await fetchSubscriptionDetails(uuid)
         if (!details) return errorResponse('Subscription updated but failed to load details', 500)
-        return successResponse(details)
+
+        return successResponse({
+            action,
+            provider: 'stripe',
+            providerStatus: stripeSnapshot.providerStatus,
+            providerSubscriptionId: stripeSnapshot.providerSubscriptionId,
+            currentPeriodEnd: stripeSnapshot.currentPeriodEnd,
+            cancelledAt: stripeSnapshot.cancelledAt,
+            cancelAtPeriodEnd: stripeSnapshot.cancelAtPeriodEnd,
+            subscription: details,
+        })
     } catch {
         return errorResponse('Invalid request body', 400)
     }

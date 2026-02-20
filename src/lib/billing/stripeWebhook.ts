@@ -68,16 +68,15 @@ export function mapStripeSubscriptionStatus(status: string | null | undefined): 
             return 'active'
         case 'past_due':
         case 'unpaid':
-        case 'incomplete_expired':
             return 'payment_failed'
         case 'incomplete':
-            return 'incomplete'
+        case 'incomplete_expired':
+            return 'pending_payment'
         case 'canceled':
             return 'cancelled'
         case 'paused':
-            return 'pending'
+            return 'pending_payment'
         default:
             return 'pending_payment'
     }
 }
-

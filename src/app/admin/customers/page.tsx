@@ -22,12 +22,9 @@ function getRoleVariant(role: AdminUser['role']): 'default' | 'success' | 'warni
 function getBillingStatusVariant(status: string | null): 'default' | 'success' | 'warning' | 'error' | 'outline' {
     const normalizedStatus = status?.toLowerCase()
     if (normalizedStatus === 'active') return 'success'
-    if (normalizedStatus === 'pending') return 'warning'
     if (normalizedStatus === 'pending_payment') return 'warning'
     if (normalizedStatus === 'payment_failed') return 'error'
-    if (normalizedStatus === 'incomplete') return 'warning'
     if (normalizedStatus === 'cancelled') return 'error'
-    if (normalizedStatus === 'completed') return 'outline'
     return 'default'
 }
 

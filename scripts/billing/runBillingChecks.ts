@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { calculateCommitmentEndDate } from '../../src/lib/billing/commitment'
+import { findLockedBillingFieldEdits, hasLockedBillingFieldEdits } from '../../src/lib/billing/manualEditGuard'
 import { mapStripeSubscriptionStatus } from '../../src/lib/billing/stripeWebhook'
 import { calculateSstQuote } from '../../src/lib/billing/tax'
 import { parseCheckoutItems } from '../../src/lib/billing/validation'
@@ -48,8 +49,23 @@ function testCheckoutItemValidation() {
 function testStripeStatusMapping() {
     assert.equal(mapStripeSubscriptionStatus('active'), 'active')
     assert.equal(mapStripeSubscriptionStatus('past_due'), 'payment_failed')
-    assert.equal(mapStripeSubscriptionStatus('incomplete'), 'incomplete')
+    assert.equal(mapStripeSubscriptionStatus('incomplete'), 'pending_payment')
+    assert.equal(mapStripeSubscriptionStatus('incomplete_expired'), 'pending_payment')
     assert.equal(mapStripeSubscriptionStatus('canceled'), 'cancelled')
+}
+
+function testManualBillingFieldGuard() {
+    assert.equal(hasLockedBillingFieldEdits({ status: 'active' }), true)
+    assert.equal(hasLockedBillingFieldEdits({ monthlyTotal: 100 }), true)
+    assert.equal(hasLockedBillingFieldEdits({ notes: 'internal comment' }), false)
+    assert.deepEqual(
+        findLockedBillingFieldEdits({
+            monthly_total: 150,
+            startDate: '2026-02-01',
+            metadata: { source: 'admin' },
+        }).sort(),
+        ['monthly_total', 'startDate'],
+    )
 }
 
 function run() {
@@ -57,8 +73,8 @@ function run() {
     testCommitmentCalculation()
     testCheckoutItemValidation()
     testStripeStatusMapping()
+    testManualBillingFieldGuard()
     console.log('Billing checks passed')
 }
 
 run()
-

@@ -29,7 +29,7 @@ type DashboardOrderItem = {
     createdAt: string
 }
 
-const REVENUE_STATUSES = new Set(['active', 'completed'])
+const REVENUE_STATUSES = new Set(['active'])
 
 function parseMoney(value: number | string | null | undefined) {
     if (value == null) return 0

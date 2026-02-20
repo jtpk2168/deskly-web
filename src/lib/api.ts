@@ -1,3 +1,5 @@
+import type { BillingStatus } from './billing/types'
+
 export type ProductStatus = 'draft' | 'active' | 'inactive'
 export type ProductPricingMode = 'fixed' | 'tiered'
 export type ProductPricingTier = {
@@ -54,7 +56,7 @@ export type AdminOrder = {
     date: string
 }
 
-export type AdminOrderStatus = 'active' | 'pending' | 'pending_payment' | 'payment_failed' | 'incomplete' | 'cancelled' | 'completed'
+export type AdminOrderStatus = BillingStatus
 export type AdminOrderSortColumn = 'created_at' | 'monthly_total' | 'status'
 export type AdminOrderFilters = PaginationQuery & {
     search?: string
@@ -103,14 +105,6 @@ export type AdminOrderDetail = {
         imageUrl: string | null
         monthlyPrice: number | null
     }
-}
-
-export type AdminOrderUpdatePayload = {
-    status?: AdminOrderStatus
-    billing_status?: AdminOrderStatus
-    start_date?: string | null
-    end_date?: string | null
-    monthly_total?: number | null
 }
 
 export type AdminSubscription = {
@@ -166,6 +160,19 @@ export type AdminSubscriptionDetail = {
         imageUrl: string | null
         monthlyPrice: number | null
     }
+}
+
+export type AdminSubscriptionAction = 'cancel_now' | 'cancel_at_period_end'
+
+export type AdminSubscriptionActionResult = {
+    action: AdminSubscriptionAction
+    provider: 'stripe'
+    providerStatus: string | null
+    providerSubscriptionId: string
+    currentPeriodEnd: string | null
+    cancelledAt: string | null
+    cancelAtPeriodEnd: boolean
+    subscription: AdminSubscriptionDetail
 }
 
 export type DeliveryOrderStatus =
@@ -629,15 +636,18 @@ export async function getAdminSubscription(id: string): Promise<AdminSubscriptio
     return parseResponse<AdminSubscriptionDetail>(res)
 }
 
-export async function updateAdminSubscription(id: string, payload: AdminOrderUpdatePayload): Promise<AdminSubscriptionDetail> {
+export async function runAdminSubscriptionAction(
+    id: string,
+    action: AdminSubscriptionAction,
+): Promise<AdminSubscriptionActionResult> {
     const res = await fetch(`/api/admin/subscriptions/${id}`, {
-        method: 'PATCH',
+        method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ action }),
     })
-    return parseResponse<AdminSubscriptionDetail>(res)
+    return parseResponse<AdminSubscriptionActionResult>(res)
 }
 
 // Backward-compatible aliases used by existing order UI code paths.
@@ -658,26 +668,6 @@ export async function getOrders(query: AdminOrderFilters = {}): Promise<Paginate
 
 export async function getOrder(id: string): Promise<AdminOrderDetail> {
     const detail = await getAdminSubscription(id)
-    return {
-        id: detail.id,
-        userId: detail.userId,
-        bundleId: detail.bundleId,
-        status: detail.billingStatus,
-        total: detail.total,
-        subtotalAmount: detail.subtotalAmount,
-        taxAmount: detail.taxAmount,
-        createdAt: detail.createdAt,
-        startDate: detail.startDate,
-        endDate: detail.endDate,
-        itemsSummary: detail.itemsSummary,
-        items: detail.items,
-        customer: detail.customer,
-        bundle: detail.bundle,
-    }
-}
-
-export async function updateOrder(id: string, payload: AdminOrderUpdatePayload): Promise<AdminOrderDetail> {
-    const detail = await updateAdminSubscription(id, payload)
     return {
         id: detail.id,
         userId: detail.userId,

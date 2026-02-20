@@ -1,14 +1,31 @@
 export const BILLING_PROVIDERS = ['mock', 'stripe'] as const
 export type BillingProviderName = (typeof BILLING_PROVIDERS)[number]
 
-export type BillingStatus =
-    | 'active'
-    | 'pending'
-    | 'pending_payment'
-    | 'payment_failed'
-    | 'incomplete'
-    | 'cancelled'
-    | 'completed'
+export const BILLING_STATUSES = [
+    'active',
+    'pending_payment',
+    'payment_failed',
+    'cancelled',
+] as const
+
+export type BillingStatus = (typeof BILLING_STATUSES)[number]
+
+const LEGACY_BILLING_STATUS_MAP = {
+    pending: 'pending_payment',
+    incomplete: 'pending_payment',
+    completed: 'cancelled',
+} as const satisfies Record<string, BillingStatus>
+
+export function normalizeBillingStatus(input: string | null | undefined): BillingStatus | null {
+    const normalized = (input ?? '').trim().toLowerCase()
+    if (!normalized) return null
+
+    if (BILLING_STATUSES.includes(normalized as BillingStatus)) {
+        return normalized as BillingStatus
+    }
+
+    return LEGACY_BILLING_STATUS_MAP[normalized as keyof typeof LEGACY_BILLING_STATUS_MAP] ?? null
+}
 
 export type BillingCheckoutItemInput = {
     product_id?: unknown
