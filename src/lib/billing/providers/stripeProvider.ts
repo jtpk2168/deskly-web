@@ -38,7 +38,7 @@ function appendMetadata(params: URLSearchParams, prefix: string, metadata?: Reco
     }
 }
 
-async function stripeRequest(method: 'GET' | 'POST', path: string, params?: URLSearchParams) {
+async function stripeRequest(method: 'GET' | 'POST' | 'DELETE', path: string, params?: URLSearchParams) {
     const secretKey = requireSecretKey()
     const url = method === 'GET' && params
         ? `${STRIPE_API_BASE}${path}?${params.toString()}`
@@ -50,7 +50,7 @@ async function stripeRequest(method: 'GET' | 'POST', path: string, params?: URLS
             Authorization: `Bearer ${secretKey}`,
             'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: method === 'POST' ? params?.toString() ?? '' : undefined,
+        body: method === 'POST' || method === 'DELETE' ? params?.toString() ?? '' : undefined,
         cache: 'no-store',
     })
 
@@ -81,6 +81,10 @@ async function stripePost(path: string, params: URLSearchParams) {
 
 async function stripeGet(path: string, params?: URLSearchParams) {
     return stripeRequest('GET', path, params)
+}
+
+async function stripeDelete(path: string, params?: URLSearchParams) {
+    return stripeRequest('DELETE', path, params)
 }
 
 function toIsoTimestamp(timestamp: number | null) {
@@ -229,11 +233,8 @@ export class StripeBillingProvider implements BillingProvider {
             throw new Error('Stripe provider subscription ID is required')
         }
 
-        const cancelParams = new URLSearchParams()
-
-        const cancelledSubscription = await stripePost(
-            `/subscriptions/${encodeURIComponent(normalizedSubscriptionId)}/cancel`,
-            cancelParams,
+        const cancelledSubscription = await stripeDelete(
+            `/subscriptions/${encodeURIComponent(normalizedSubscriptionId)}`,
         )
 
         return toSubscriptionSnapshot(cancelledSubscription, normalizedSubscriptionId)
