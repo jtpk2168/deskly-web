@@ -37,6 +37,14 @@ function readRecord(value: unknown): Record<string, unknown> | null {
     return typeof value === 'object' && value != null ? (value as Record<string, unknown>) : null
 }
 
+function readStringArray(value: unknown) {
+    if (!Array.isArray(value)) return [] as string[]
+    return value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter(Boolean)
+}
+
 function parseIsoFromUnixTimestamp(value: number | null) {
     if (value == null) return null
     const parsed = new Date(value * 1000)
@@ -264,6 +272,34 @@ async function mirrorStripeInvoice({
     return true
 }
 
+async function syncSubscriptionInventory(subscriptionId: string) {
+    const { data, error } = await supabaseServer.rpc('sync_subscription_inventory', {
+        p_subscription_id: subscriptionId,
+    })
+
+    if (error) {
+        throw new Error(`Failed to sync subscription inventory: ${error.message}`)
+    }
+
+    const result = readRecord(data)
+    const ok = readBoolean(result?.ok)
+
+    if (ok === true) return
+
+    const syncError = readString(result?.error) ?? 'inventory_sync_failed'
+    if (syncError === 'insufficient_stock') {
+        const productIds = readStringArray(result?.product_ids)
+        const details = productIds.length > 0 ? ` (product_id: ${productIds.join(', ')})` : ''
+        throw new Error(`Insufficient stock to fulfill this subscription${details}`)
+    }
+
+    if (syncError === 'subscription_not_found') {
+        throw new Error(`Subscription not found while syncing inventory: ${subscriptionId}`)
+    }
+
+    throw new Error(`Subscription inventory sync failed: ${syncError}`)
+}
+
 async function processStripeEvent(event: StripeWebhookEvent) {
     const eventObject = readRecord(event.data?.object) ?? {}
     const metadata = typeof eventObject.metadata === 'object' && eventObject.metadata != null
@@ -324,6 +360,10 @@ async function processStripeEvent(event: StripeWebhookEvent) {
             throw new Error(`Failed to update checkout session status: ${error.message}`)
         }
 
+        if (status === 'active') {
+            await syncSubscriptionInventory(resolvedSubscriptionId)
+        }
+
         return { subscriptionId: resolvedSubscriptionId, handled: true }
     }
 
@@ -360,6 +400,10 @@ async function processStripeEvent(event: StripeWebhookEvent) {
             throw new Error(`Failed to update subscription lifecycle: ${error.message}`)
         }
 
+        if (billingStatus === 'active') {
+            await syncSubscriptionInventory(resolvedSubscriptionId)
+        }
+
         return { subscriptionId: resolvedSubscriptionId, handled: true }
     }
 
@@ -385,6 +429,8 @@ async function processStripeEvent(event: StripeWebhookEvent) {
         if (error) {
             throw new Error(`Failed to mark invoice paid: ${error.message}`)
         }
+
+        await syncSubscriptionInventory(resolvedSubscriptionId)
 
         return { subscriptionId: resolvedSubscriptionId, handled: true }
     }
