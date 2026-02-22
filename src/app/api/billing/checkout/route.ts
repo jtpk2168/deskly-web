@@ -12,8 +12,8 @@ import { calculateCommitmentEndDate, parseOptionalIsoDate } from '@/lib/billing/
 import { toMoney } from '@/lib/billing/money'
 import { getBillingProvider, getBillingProviderByName } from '@/lib/billing/providers'
 import { calculateSstQuote } from '@/lib/billing/tax'
-import { BillingCheckoutRequest, BillingProviderName, BillingTaxQuote, NormalizedBillingCheckoutItem } from '@/lib/billing/types'
-import { hasText, parseCheckoutItems, parseOptionalMoney, parseOptionalPositiveInteger, parseUUID } from '@/lib/billing/validation'
+import { BillingCheckoutRequest, BillingProviderName, BillingTaxQuote, NormalizedBillingCheckoutItem, normalizeBillingStatus } from '@/lib/billing/types'
+import { hasText, parseCheckoutItems, parseOptionalMoney, parseOptionalPositiveInteger, parseUUID, resolveUniformItemDuration } from '@/lib/billing/validation'
 import { errorResponse, successResponse } from '../../../../../lib/apiResponse'
 import { supabaseServer } from '../../../../../lib/supabaseServer'
 
@@ -233,10 +233,10 @@ async function resolveIdempotentReplayResponse(
     }
 
     const sessionId = existing.provider_checkout_session_id?.trim() || null
-    const status = existing.status ?? null
+    const status = normalizeBillingStatus(existing.status)
     const provider = normalizeBillingProvider(existing.billing_provider)
 
-    if (!sessionId && (status === 'pending_payment' || status === 'pending' || status === 'incomplete')) {
+    if (!sessionId && status === 'pending_payment') {
         return errorResponse('Checkout is still being created. Please retry in a few seconds.', 409)
     }
 
@@ -324,18 +324,21 @@ export async function POST(request: NextRequest) {
         const parsedItems = parseCheckoutItems(body.items)
         if (parsedItems.error) return errorResponse(parsedItems.error, 400)
 
-        const normalizedItems = parsedItems.items.length > 0
+        const parsedCheckoutItems = parsedItems.items.length > 0
             ? parsedItems.items
             : (() => {
                 const fallbackItem = getFallbackItemFromBody(body, parsedMonthlyTotal.value)
                 return fallbackItem ? [fallbackItem] : []
             })()
 
-        if (normalizedItems.length === 0) {
+        if (parsedCheckoutItems.length === 0) {
             return errorResponse('Provide at least one line item or monthly_total', 400)
         }
 
-        const itemDurations = normalizedItems
+        const uniformItemDuration = resolveUniformItemDuration(parsedCheckoutItems)
+        if (uniformItemDuration.error) return errorResponse(uniformItemDuration.error, 400)
+
+        const itemDurations = parsedCheckoutItems
             .map((item) => item.duration_months)
             .filter((duration): duration is number => typeof duration === 'number' && Number.isInteger(duration) && duration > 0)
 
@@ -345,12 +348,18 @@ export async function POST(request: NextRequest) {
 
         const requestedMinimumTerm = parseOptionalPositiveInteger(body.minimum_term_months, 'minimum_term_months')
         if (requestedMinimumTerm.error) return errorResponse(requestedMinimumTerm.error, 400)
+        if (requestedMinimumTerm.value != null && requestedMinimumTerm.value < BILLING_MINIMUM_TERM_MONTHS) {
+            return errorResponse(`minimum_term_months must be at least ${BILLING_MINIMUM_TERM_MONTHS}`, 400)
+        }
 
-        const minimumTermMonths = Math.max(
-            BILLING_MINIMUM_TERM_MONTHS,
-            requestedMinimumTerm.value ?? 0,
-            itemDurations.length > 0 ? Math.max(...itemDurations) : 0,
-        )
+        const selectedOrderDuration = requestedMinimumTerm.value
+            ?? uniformItemDuration.durationMonths
+            ?? BILLING_MINIMUM_TERM_MONTHS
+        const minimumTermMonths = Math.max(BILLING_MINIMUM_TERM_MONTHS, selectedOrderDuration)
+        const normalizedItems = parsedCheckoutItems.map((item) => ({
+            ...item,
+            duration_months: minimumTermMonths,
+        }))
 
         const startDateIso = startDate.value ?? new Date().toISOString()
         const commitmentEndDateIso = calculateCommitmentEndDate(startDateIso, minimumTermMonths, endDate.value)

@@ -332,13 +332,20 @@ async function processStripeEvent(event: StripeWebhookEvent) {
         const billingStatus = event.type === 'customer.subscription.deleted'
             ? 'cancelled'
             : mapStripeSubscriptionStatus(stripeStatus)
+        const cancelAtPeriodEnd = readBoolean(eventObject.cancel_at_period_end) === true
         const periodEndIso = parseIsoFromUnixTimestamp(readNumber(eventObject.current_period_end))
+        const canceledAtIso = parseIsoFromUnixTimestamp(readNumber(eventObject.canceled_at))
         const existingSubscription = await loadSubscriptionReference(resolvedSubscriptionId)
 
-        // Keep commitment/order end date stable; Stripe current_period_end is the billing-cycle boundary.
+        // Stripe timestamps differ for immediate cancel vs period-end cancel.
+        // For cancel-at-period-end, service end should mirror current_period_end.
         const persistedEndDate = readString(existingSubscription?.end_date)
         const commitmentEndDate = readString(existingSubscription?.commitment_end_at)
-        const effectiveEndDate = persistedEndDate ?? commitmentEndDate ?? periodEndIso
+        const effectiveEndDate = cancelAtPeriodEnd
+            ? (periodEndIso ?? persistedEndDate ?? commitmentEndDate ?? canceledAtIso)
+            : event.type === 'customer.subscription.deleted'
+                ? (canceledAtIso ?? periodEndIso ?? persistedEndDate ?? commitmentEndDate)
+                : (persistedEndDate ?? commitmentEndDate ?? periodEndIso)
 
         const { error } = await supabaseServer
             .from('subscriptions')

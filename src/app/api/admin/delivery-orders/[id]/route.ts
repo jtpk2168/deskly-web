@@ -2,8 +2,21 @@ import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../../../lib/apiResponse'
 import { normalizeDeliveryOrderStatus } from '@/lib/deliveryOrders'
+import { normalizeBillingStatus } from '@/lib/billing/types'
 
 type RouteParams = { params: Promise<{ id: string }> }
+
+const FULFILLMENT_ACTIONS = [
+    'mark_partially_collected',
+    'mark_collected_and_close',
+] as const
+
+type FulfillmentAction = (typeof FULFILLMENT_ACTIONS)[number]
+type FulfillmentEventAction = FulfillmentAction | 'request_offboarding' | 'force_offboarding'
+const LOCKED_FULFILLMENT_FIELDS = new Set([
+    'service_state',
+    'collection_status',
+])
 
 type DeliveryOrderRecord = {
     id: string
@@ -47,6 +60,38 @@ type SubscriptionItemRecord = {
     product_name: string | null
     category: string | null
     quantity: number | string | null
+}
+
+type FulfillmentEventRecord = {
+    id: string
+    action: FulfillmentEventAction
+    from_service_state: string | null
+    to_service_state: string | null
+    from_collection_status: string | null
+    to_collection_status: string | null
+    note: string | null
+    actor_label: string
+    created_at: string
+}
+
+function parseFulfillmentAction(value: unknown): FulfillmentAction | null {
+    if (typeof value !== 'string') return null
+    return FULFILLMENT_ACTIONS.includes(value as FulfillmentAction)
+        ? (value as FulfillmentAction)
+        : null
+}
+
+function normalizeFieldKey(key: string) {
+    return key
+        .trim()
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .replace(/[\s-]+/g, '_')
+        .toLowerCase()
+}
+
+function hasLockedFulfillmentFieldEdits(payload: unknown) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false
+    return Object.keys(payload).some((key) => LOCKED_FULFILLMENT_FIELDS.has(normalizeFieldKey(key)))
 }
 
 function unwrapSingle<T>(value: T | T[] | null | undefined): T | null {
@@ -154,6 +199,7 @@ async function fetchDeliveryOrderDetails(deliveryOrderId: string) {
             created_at: order.created_at,
             updated_at: order.updated_at,
             subscription: null,
+            fulfillment_events: [],
         }
     }
 
@@ -161,7 +207,7 @@ async function fetchDeliveryOrderDetails(deliveryOrderId: string) {
     const profile = unwrapSingle(subscription.profiles)
     const customerName = await resolveCustomerName(subscription.user_id, profile?.full_name ?? null)
 
-    const [fulfillmentResult, itemsResult] = await Promise.all([
+    const [fulfillmentResult, itemsResult, fulfillmentEventsResult] = await Promise.all([
         supabaseServer
             .from('subscription_fulfillment')
             .select('subscription_id, service_state, collection_status, first_delivery_at')
@@ -172,10 +218,26 @@ async function fetchDeliveryOrderDetails(deliveryOrderId: string) {
             .select('product_name, category, quantity')
             .eq('subscription_id', order.subscription_id)
             .order('created_at', { ascending: true }),
+        supabaseServer
+            .from('subscription_fulfillment_events')
+            .select('id, action, from_service_state, to_service_state, from_collection_status, to_collection_status, note, actor_label, created_at')
+            .eq('subscription_id', order.subscription_id)
+            .order('created_at', { ascending: false }),
     ])
+
+    if (fulfillmentResult.error) {
+        throw new Error(`Failed to load subscription fulfillment: ${fulfillmentResult.error.message}`)
+    }
+    if (itemsResult.error) {
+        throw new Error(`Failed to load subscription items: ${itemsResult.error.message}`)
+    }
+    if (fulfillmentEventsResult.error) {
+        throw new Error(`Failed to load fulfillment events: ${fulfillmentEventsResult.error.message}`)
+    }
 
     const fulfillment = (fulfillmentResult.data as SubscriptionFulfillmentRecord | null) ?? null
     const itemRows = (itemsResult.data ?? []) as SubscriptionItemRecord[]
+    const fulfillmentEvents = (fulfillmentEventsResult.data ?? []) as FulfillmentEventRecord[]
     const items = itemRows.map((row) => ({
         name: row.product_name?.trim() || row.category?.trim() || 'Item',
         category: row.category?.trim() || null,
@@ -184,6 +246,7 @@ async function fetchDeliveryOrderDetails(deliveryOrderId: string) {
     const itemsSummary = items.length > 0
         ? items.map((item) => `${item.name} x ${item.quantity}`).join(', ')
         : 'No items captured'
+    const normalizedSubscriptionStatus = normalizeBillingStatus(subscription.status)
 
     return {
         id: order.id,
@@ -198,8 +261,8 @@ async function fetchDeliveryOrderDetails(deliveryOrderId: string) {
             id: subscription.id,
             user_id: subscription.user_id,
             customer_name: customerName,
-            billing_status: subscription.status,
-            status: subscription.status,
+            billing_status: normalizedSubscriptionStatus,
+            status: normalizedSubscriptionStatus,
             monthly_total: parseMoney(subscription.monthly_total),
             start_date: subscription.start_date,
             end_date: subscription.end_date,
@@ -215,6 +278,17 @@ async function fetchDeliveryOrderDetails(deliveryOrderId: string) {
             items_summary: itemsSummary,
             items,
         },
+        fulfillment_events: fulfillmentEvents.map((event) => ({
+            id: event.id,
+            action: event.action,
+            from_service_state: event.from_service_state,
+            to_service_state: event.to_service_state,
+            from_collection_status: event.from_collection_status,
+            to_collection_status: event.to_collection_status,
+            note: event.note,
+            actor_label: event.actor_label,
+            created_at: event.created_at,
+        })),
     }
 }
 
@@ -242,7 +316,7 @@ async function loadDispatchContext(subscriptionId: string) {
     ])
 
     return {
-        billingStatus: (subscriptionResult.data as { status: string | null } | null)?.status ?? null,
+        billingStatus: normalizeBillingStatus((subscriptionResult.data as { status: string | null } | null)?.status ?? null),
         fulfillment: (fulfillmentResult.data as SubscriptionFulfillmentRecord | null) ?? null,
     }
 }
@@ -305,6 +379,10 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         if (!uuid) return errorResponse('Invalid delivery order ID format', 400)
 
         const body = await request.json().catch(() => ({}))
+        if (hasLockedFulfillmentFieldEdits(body)) {
+            return errorResponse('Fulfillment fields are managed by admin actions and cannot be edited directly.', 400)
+        }
+
         const nextStatus = normalizeDeliveryOrderStatus(body?.do_status ?? body?.status)
         if (!nextStatus) {
             return errorResponse('Invalid do_status. Must be: confirmed, dispatched, delivered, partially_delivered, failed, rescheduled, cancelled', 400)
@@ -374,6 +452,56 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
         const details = await fetchDeliveryOrderDetails(uuid)
         if (!details) return errorResponse('Delivery order updated but failed to load details', 500)
         return successResponse(details)
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid request body'
+        return errorResponse(message, 400)
+    }
+}
+
+/** POST /api/admin/delivery-orders/:id — Apply fulfillment action */
+export async function POST(request: NextRequest, { params }: RouteParams) {
+    try {
+        const { id } = await params
+        const uuid = parseUUID(id)
+        if (!uuid) return errorResponse('Invalid delivery order ID format', 400)
+
+        const body = await request.json().catch(() => ({}))
+        const action = parseFulfillmentAction(body?.action)
+        if (!action) {
+            return errorResponse('Invalid action. Must be: mark_partially_collected, mark_collected_and_close', 400)
+        }
+
+        const note = hasText(body?.note) ? body.note.trim() : null
+        if (action === 'mark_collected_and_close' && !note) {
+            return errorResponse(`note is required for ${action}`, 400)
+        }
+
+        const { error: actionError } = await supabaseServer.rpc('admin_apply_fulfillment_action', {
+            p_delivery_order_id: uuid,
+            p_action: action,
+            p_note: note,
+        })
+
+        if (actionError) {
+            if (actionError.code === 'P0002') {
+                return errorResponse('Delivery order not found', 404)
+            }
+            if (actionError.code === 'P0001') {
+                return errorResponse(actionError.message, 409)
+            }
+            if (actionError.code === '22023') {
+                return errorResponse(actionError.message, 400)
+            }
+            return errorResponse(actionError.message, 500)
+        }
+
+        const details = await fetchDeliveryOrderDetails(uuid)
+        if (!details) return errorResponse('Delivery order not found', 404)
+
+        return successResponse({
+            action,
+            delivery_order: details,
+        })
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Invalid request body'
         return errorResponse(message, 400)

@@ -1,5 +1,7 @@
-export const ADMIN_ORDER_STATUSES = ['active', 'pending', 'pending_payment', 'payment_failed', 'incomplete', 'cancelled', 'completed'] as const
-export type AdminOrderStatus = (typeof ADMIN_ORDER_STATUSES)[number]
+import { BILLING_STATUSES, BillingStatus, normalizeBillingStatus } from './billing/types'
+
+export const ADMIN_ORDER_STATUSES = BILLING_STATUSES
+export type AdminOrderStatus = BillingStatus
 
 export const ADMIN_ORDER_SORT_COLUMNS = ['created_at', 'monthly_total', 'status'] as const
 export type AdminOrderSortColumn = (typeof ADMIN_ORDER_SORT_COLUMNS)[number]
@@ -18,10 +20,7 @@ type OrderQueryBuilder = {
 }
 
 export function normalizeOrderStatus(input: string | null | undefined): AdminOrderStatus | null {
-    const key = (input ?? '').trim().toLowerCase()
-    if (!key) return null
-    if (ADMIN_ORDER_STATUSES.includes(key as AdminOrderStatus)) return key as AdminOrderStatus
-    return null
+    return normalizeBillingStatus(input)
 }
 
 export function parseAdminOrderFilters(searchParams: URLSearchParams): AdminOrderFilters {

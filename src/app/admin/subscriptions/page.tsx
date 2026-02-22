@@ -17,6 +17,17 @@ import {
     runAdminSubscriptionAction,
 } from '@/lib/api'
 
+type BillingActionNoticeTone = 'success' | 'info'
+
+type BillingActionNotice = {
+    tone: BillingActionNoticeTone
+    message: string
+}
+
+type ScheduledCancellationMemory = {
+    periodEnd: string | null
+}
+
 function getStatusVariant(status: string | null): 'default' | 'success' | 'warning' | 'error' | 'outline' {
     const normalizedStatus = status?.toLowerCase()
     if (normalizedStatus === 'active') return 'success'
@@ -35,9 +46,36 @@ function formatCurrencyOrDash(value: number | null) {
     return formatCurrency(value)
 }
 
+function getOrdinalDay(day: number) {
+    const mod100 = day % 100
+    if (mod100 >= 11 && mod100 <= 13) return `${day}th`
+    const mod10 = day % 10
+    if (mod10 === 1) return `${day}st`
+    if (mod10 === 2) return `${day}nd`
+    if (mod10 === 3) return `${day}rd`
+    return `${day}th`
+}
+
+function formatLongDate(parsed: Date) {
+    const day = getOrdinalDay(parsed.getDate())
+    const month = parsed.toLocaleString('en-US', { month: 'long' })
+    const year = parsed.getFullYear()
+    return `${day} ${month} ${year}`
+}
+
 function formatDate(value: string | null) {
     if (!value) return '-'
-    return new Date(value).toLocaleDateString()
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return '-'
+    return formatLongDate(parsed)
+}
+
+function formatDateTime(value: string | null) {
+    if (!value) return '-'
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return '-'
+    const time = parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    return `${formatLongDate(parsed)}, ${time}`
 }
 
 function formatAddress(value: string | null) {
@@ -80,6 +118,9 @@ export default function SubscriptionsPage() {
     const [selectedSubscription, setSelectedSubscription] = useState<AdminSubscriptionDetail | null>(null)
     const [detailLoading, setDetailLoading] = useState(false)
     const [billingActionLoading, setBillingActionLoading] = useState<AdminSubscriptionAction | null>(null)
+    const [billingActionNotice, setBillingActionNotice] = useState<BillingActionNotice | null>(null)
+    const [cancelAtPeriodEndScheduled, setCancelAtPeriodEndScheduled] = useState(false)
+    const [scheduledCancellationBySubscriptionId, setScheduledCancellationBySubscriptionId] = useState<Record<string, ScheduledCancellationMemory>>({})
     const [detailError, setDetailError] = useState<string | null>(null)
     const [userIdFilter, setUserIdFilter] = useState<string | null>(() => searchParams.get('user_id')?.trim() || null)
     const [customerFilterLabel, setCustomerFilterLabel] = useState<string | null>(() => searchParams.get('customer')?.trim() || null)
@@ -123,6 +164,8 @@ export default function SubscriptionsPage() {
         setSelectedSubscription(null)
         setDetailLoading(false)
         setBillingActionLoading(null)
+        setBillingActionNotice(null)
+        setCancelAtPeriodEndScheduled(false)
         setDetailError(null)
     }, [])
 
@@ -130,17 +173,43 @@ export default function SubscriptionsPage() {
         setSelectedSubscriptionId(subscriptionId)
         setSelectedSubscription(null)
         setBillingActionLoading(null)
+        setBillingActionNotice(null)
+        setCancelAtPeriodEndScheduled(false)
         setDetailError(null)
         setDetailLoading(true)
         try {
             const details = await getAdminSubscription(subscriptionId)
+            const rememberedScheduledCancellation = scheduledCancellationBySubscriptionId[subscriptionId] ?? null
+            const detailBillingStatus = details.billingStatus?.toLowerCase() ?? null
+            const detailIsCancelled = detailBillingStatus === 'cancelled'
+            const detailHasOffboarding = details.serviceState?.toLowerCase() === 'offboarding_requested'
+            const shouldShowScheduledCancellation = !detailIsCancelled && (detailHasOffboarding || rememberedScheduledCancellation != null)
+
             setSelectedSubscription(details)
+            setCancelAtPeriodEndScheduled(shouldShowScheduledCancellation)
+
+            if (shouldShowScheduledCancellation) {
+                setScheduledCancellationBySubscriptionId((previous) => ({
+                    ...previous,
+                    [subscriptionId]: {
+                        periodEnd: rememberedScheduledCancellation?.periodEnd ?? details.endDate ?? null,
+                    },
+                }))
+            }
+
+            if (detailIsCancelled && rememberedScheduledCancellation != null) {
+                setScheduledCancellationBySubscriptionId((previous) => {
+                    const next = { ...previous }
+                    delete next[subscriptionId]
+                    return next
+                })
+            }
         } catch (loadError) {
             setDetailError(loadError instanceof Error ? loadError.message : 'Failed to load subscription details')
         } finally {
             setDetailLoading(false)
         }
-    }, [])
+    }, [scheduledCancellationBySubscriptionId])
 
     const executeBillingAction = useCallback(async (action: AdminSubscriptionAction) => {
         if (!selectedSubscriptionId || !selectedSubscription) return
@@ -149,15 +218,45 @@ export default function SubscriptionsPage() {
         if (!confirmed) return
 
         setBillingActionLoading(action)
+        setBillingActionNotice(null)
         setDetailError(null)
 
         try {
-            await runAdminSubscriptionAction(selectedSubscriptionId, action)
-            const [refreshedDetails] = await Promise.all([
-                getAdminSubscription(selectedSubscriptionId),
-                loadData(),
-            ])
-            setSelectedSubscription(refreshedDetails)
+            const result = await runAdminSubscriptionAction(selectedSubscriptionId, action)
+            setSelectedSubscription(result.subscription)
+            const hasScheduledCancellation = result.cancelAtPeriodEnd && result.subscription.billingStatus !== 'cancelled'
+            setCancelAtPeriodEndScheduled(hasScheduledCancellation)
+
+            if (action === 'cancel_at_period_end' && hasScheduledCancellation) {
+                setScheduledCancellationBySubscriptionId((previous) => ({
+                    ...previous,
+                    [selectedSubscriptionId]: {
+                        periodEnd: result.currentPeriodEnd ?? result.subscription.endDate ?? null,
+                    },
+                }))
+            } else if (action === 'cancel_now' || result.subscription.billingStatus === 'cancelled') {
+                setScheduledCancellationBySubscriptionId((previous) => {
+                    const next = { ...previous }
+                    delete next[selectedSubscriptionId]
+                    return next
+                })
+            }
+
+            if (action === 'cancel_now') {
+                setBillingActionNotice({
+                    tone: 'success',
+                    message: `Subscription cancelled in Stripe at ${formatDateTime(result.cancelledAt)}.`,
+                })
+            } else {
+                setBillingActionNotice({
+                    tone: 'info',
+                    message: hasScheduledCancellation
+                        ? `Cancellation is scheduled at period end (${formatDate(result.currentPeriodEnd)}).`
+                        : 'Cancellation request sent to Stripe.',
+                })
+            }
+
+            await loadData()
         } catch (actionError) {
             setDetailError(actionError instanceof Error ? actionError.message : 'Failed to run billing action')
         } finally {
@@ -168,6 +267,20 @@ export default function SubscriptionsPage() {
         selectedSubscription,
         selectedSubscriptionId,
     ])
+
+    const normalizedDetailBillingStatus = selectedSubscription?.billingStatus?.toLowerCase() ?? null
+    const isDetailBillingCancelled = normalizedDetailBillingStatus === 'cancelled'
+    const hasOffboardingRequested = selectedSubscription?.serviceState === 'offboarding_requested'
+    const isCancellationScheduled = !isDetailBillingCancelled && (cancelAtPeriodEndScheduled || hasOffboardingRequested)
+    const rememberedScheduledCancellation = selectedSubscriptionId
+        ? (scheduledCancellationBySubscriptionId[selectedSubscriptionId] ?? null)
+        : null
+    const scheduledCancellationPeriodEnd = rememberedScheduledCancellation?.periodEnd ?? selectedSubscription?.endDate ?? null
+    const canRunCancelNow = selectedSubscription != null && !isDetailBillingCancelled && billingActionLoading == null
+    const canRunCancelAtPeriodEnd = selectedSubscription != null
+        && !isDetailBillingCancelled
+        && !isCancellationScheduled
+        && billingActionLoading == null
 
     const handleInlineSort = useCallback((column: AdminOrderSortColumn) => {
         setPage(1)
@@ -512,22 +625,47 @@ export default function SubscriptionsPage() {
                                             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Billing Actions</p>
                                             <p className="text-xs text-subtext-light">Billing fields are read-only and synced from Stripe.</p>
                                         </div>
+                                        {isDetailBillingCancelled ? (
+                                            <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                                {billingActionNotice?.message ?? 'Subscription is cancelled in Stripe. No further billing actions are available.'}
+                                            </div>
+                                        ) : isCancellationScheduled ? (
+                                            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                                {billingActionNotice?.message ?? (
+                                                    scheduledCancellationPeriodEnd
+                                                        ? `Cancellation is scheduled at period end (${formatDate(scheduledCancellationPeriodEnd)}).`
+                                                        : 'Cancellation is scheduled at period end.'
+                                                )}
+                                            </div>
+                                        ) : billingActionNotice ? (
+                                            <div className={`mb-3 rounded-lg px-3 py-2 text-sm ${
+                                                billingActionNotice.tone === 'success'
+                                                    ? 'border border-green-200 bg-green-50 text-green-700'
+                                                    : 'border border-blue-200 bg-blue-50 text-blue-700'
+                                            }`}>
+                                                {billingActionNotice.message}
+                                            </div>
+                                        ) : null}
                                         <div className="flex flex-wrap gap-2">
                                             <button
                                                 type="button"
                                                 onClick={() => void executeBillingAction('cancel_now')}
-                                                disabled={billingActionLoading != null}
+                                                disabled={!canRunCancelNow}
                                                 className="rounded-lg border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                                             >
-                                                {billingActionLoading === 'cancel_now' ? 'Cancelling...' : 'Cancel Now'}
+                                                {isDetailBillingCancelled ? 'Cancelled' : billingActionLoading === 'cancel_now' ? 'Cancelling...' : 'Cancel Now'}
                                             </button>
                                             <button
                                                 type="button"
                                                 onClick={() => void executeBillingAction('cancel_at_period_end')}
-                                                disabled={billingActionLoading != null}
+                                                disabled={!canRunCancelAtPeriodEnd}
                                                 className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                                             >
-                                                {billingActionLoading === 'cancel_at_period_end' ? 'Scheduling...' : 'Cancel At Period End'}
+                                                {isCancellationScheduled
+                                                    ? 'Cancellation Scheduled'
+                                                    : billingActionLoading === 'cancel_at_period_end'
+                                                        ? 'Scheduling...'
+                                                        : 'Cancel At Period End'}
                                             </button>
                                         </div>
                                     </div>

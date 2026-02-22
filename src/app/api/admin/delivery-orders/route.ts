@@ -3,6 +3,7 @@ import { supabaseServer } from '../../../../../lib/supabaseServer'
 import { successResponse, errorResponse } from '../../../../../lib/apiResponse'
 import { parsePaginationParams } from '@/lib/pagination'
 import { parseDeliveryOrderFilters } from '@/lib/deliveryOrders'
+import { normalizeBillingStatus } from '@/lib/billing/types'
 
 type DeliveryOrderRecord = {
     id: string
@@ -195,7 +196,7 @@ async function mapDeliveryOrderRecords(records: DeliveryOrderRecord[]) {
             customer,
             items: itemSummaryMap.get(record.subscription_id) ?? 'No items captured',
             do_status: record.do_status,
-            billing_status: subscription?.status ?? null,
+            billing_status: normalizeBillingStatus(subscription?.status ?? null),
             service_state: fulfillment?.service_state ?? null,
             collection_status: fulfillment?.collection_status ?? null,
             date: new Date(record.created_at).toLocaleDateString(),

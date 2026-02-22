@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server'
+import { BILLING_MINIMUM_TERM_MONTHS } from '@/lib/billing/config'
+import { resolveUniformItemDuration } from '@/lib/billing/validation'
 import { supabaseServer } from '../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../lib/apiResponse'
+import { normalizeBillingStatus } from '@/lib/billing/types'
 
 type SubscriptionItemInput = {
     product_id?: unknown
@@ -198,7 +201,11 @@ export async function GET(request: NextRequest) {
             .order('created_at', { ascending: false })
 
         if (error) return errorResponse(error.message, 500)
-        return successResponse(data)
+        const subscriptions = (data ?? []).map((subscription) => ({
+            ...subscription,
+            status: normalizeBillingStatus((subscription as { status: string | null }).status),
+        }))
+        return successResponse(subscriptions)
     } catch {
         return errorResponse('Internal server error', 500)
     }
@@ -214,6 +221,7 @@ export async function POST(request: NextRequest) {
             start_date,
             end_date,
             monthly_total,
+            minimum_term_months,
             items,
             delivery_company_name,
             delivery_address,
@@ -247,6 +255,16 @@ export async function POST(request: NextRequest) {
 
         const parsedItems = parseSubscriptionItems(items)
         if (parsedItems.error) return errorResponse(parsedItems.error, 400)
+        const uniformItemDuration = resolveUniformItemDuration(parsedItems.items)
+        if (uniformItemDuration.error) return errorResponse(uniformItemDuration.error, 400)
+
+        const requestedMinimumTerm = parseOptionalPositiveInteger(minimum_term_months, 'minimum_term_months')
+        if (requestedMinimumTerm.error) return errorResponse(requestedMinimumTerm.error, 400)
+
+        const orderDurationMonths = requestedMinimumTerm.value ?? uniformItemDuration.durationMonths
+        if (orderDurationMonths != null && orderDurationMonths < BILLING_MINIMUM_TERM_MONTHS) {
+            return errorResponse(`minimum_term_months must be at least ${BILLING_MINIMUM_TERM_MONTHS}`, 400)
+        }
 
         const { data: authUserData, error: authUserError } = await supabaseServer.auth.admin.getUserById(userUuid)
         if (authUserError) {
@@ -316,10 +334,11 @@ export async function POST(request: NextRequest) {
             .insert({
                 user_id: userUuid,
                 bundle_id: bundleUuid,
-                status: 'pending',
+                status: 'pending_payment',
                 start_date: startDate.value,
                 end_date: endDate.value,
                 monthly_total: monthlyTotal.value,
+                minimum_term_months: orderDurationMonths,
                 delivery_company_name: resolvedDeliveryCompanyName,
                 delivery_address: resolvedDeliveryAddress,
                 delivery_city: resolvedDeliveryCity,
@@ -353,7 +372,7 @@ export async function POST(request: NextRequest) {
                         product_name: item.product_name,
                         category: item.category,
                         monthly_price: item.monthly_price,
-                        duration_months: item.duration_months,
+                        duration_months: orderDurationMonths,
                         quantity: item.quantity,
                     }))
                 )

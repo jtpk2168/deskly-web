@@ -206,6 +206,24 @@ export type AdminDeliveryOrder = {
     date: string
 }
 
+export type AdminFulfillmentAction =
+    | 'mark_partially_collected'
+    | 'mark_collected_and_close'
+
+export type AdminFulfillmentEventAction = AdminFulfillmentAction | 'request_offboarding' | 'force_offboarding'
+
+export type AdminFulfillmentEvent = {
+    id: string
+    action: AdminFulfillmentEventAction
+    from_service_state: string | null
+    to_service_state: string | null
+    from_collection_status: string | null
+    to_collection_status: string | null
+    note: string | null
+    actor_label: string
+    created_at: string
+}
+
 export type AdminDeliveryOrderDetail = {
     id: string
     subscription_id: string
@@ -240,6 +258,7 @@ export type AdminDeliveryOrderDetail = {
             quantity: number
         }>
     } | null
+    fulfillment_events: AdminFulfillmentEvent[]
 }
 
 export type AdminDeliveryOrderUpdatePayload = {
@@ -249,12 +268,29 @@ export type AdminDeliveryOrderUpdatePayload = {
     cancelled_reason?: string | null
 }
 
+export type AdminFulfillmentActionResult = {
+    action: AdminFulfillmentAction
+    delivery_order: AdminDeliveryOrderDetail
+}
+
 export type AdminUser = {
     id: string
     name: string
     email: string
     role: 'Admin' | 'Customer'
     joinedDate: string
+    isSuperAdmin?: boolean
+}
+
+export type AdminCreatePayload = {
+    name: string
+    email: string
+    password: string
+}
+
+export type AdminUpdatePayload = {
+    name?: string
+    email?: string
 }
 
 export type CustomerProfile = {
@@ -710,6 +746,24 @@ export async function updateDeliveryOrder(id: string, payload: AdminDeliveryOrde
     return parseResponse<AdminDeliveryOrderDetail>(res)
 }
 
+export async function runDeliveryOrderFulfillmentAction(
+    id: string,
+    action: AdminFulfillmentAction,
+    note?: string,
+): Promise<AdminFulfillmentActionResult> {
+    const payload = note?.trim()
+        ? { action, note: note.trim() }
+        : { action }
+    const res = await fetch(`/api/admin/delivery-orders/${id}`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    })
+    return parseResponse<AdminFulfillmentActionResult>(res)
+}
+
 // Billing
 export async function getBillingRuntimeConfig(): Promise<BillingRuntimeConfig> {
     const res = await fetch('/api/billing/config', { cache: 'no-store' })
@@ -760,13 +814,31 @@ export async function getAdmins(query: PaginationQuery = {}): Promise<PaginatedR
     return parsePaginatedResponse<AdminUser>(res)
 }
 
+export async function createAdmin(payload: AdminCreatePayload): Promise<AdminUser> {
+    const res = await fetch('/api/admins', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    })
+    return parseResponse<AdminUser>(res)
+}
+
+export async function updateAdmin(userId: string, payload: AdminUpdatePayload): Promise<{ message: string }> {
+    const res = await fetch(`/api/admins?id=${userId}`, {
+        method: 'PATCH',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    })
+    return parseResponse<{ message: string }>(res)
+}
+
 export async function deleteAdmin(userId: string) {
     const res = await fetch(`/api/admins?id=${userId}`, { method: 'DELETE' })
-    if (!res.ok) {
-        const errorText = await res.text()
-        throw new Error(errorText || 'Failed to delete admin')
-    }
-    return res.json()
+    return parseResponse<{ message: string }>(res)
 }
 
 // Customers

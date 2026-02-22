@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../lib/supabaseServer'
 import { successResponse, errorResponse } from '../../../../lib/apiResponse'
 import { parsePaginationParams } from '@/lib/pagination'
+import { normalizeBillingStatus } from '@/lib/billing/types'
 
 type OrderRecord = {
     id: string
@@ -45,7 +46,7 @@ export async function GET(request: NextRequest) {
             customer: sub.profiles?.full_name || sub.profiles?.email || 'Unknown User',
             items: sub.bundles?.name || 'Bundle',
             total: sub.monthly_total,
-            status: sub.status, // pending, active, cancelled, etc.
+            status: normalizeBillingStatus(sub.status),
             date: new Date(sub.created_at).toLocaleDateString(),
         }))
 

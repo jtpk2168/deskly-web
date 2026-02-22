@@ -9,9 +9,11 @@ import {
     AdminDeliveryOrder,
     AdminDeliveryOrderDetail,
     AdminDeliveryOrderUpdatePayload,
+    AdminFulfillmentAction,
     DeliveryOrderStatus,
     getDeliveryOrder,
     getDeliveryOrders,
+    runDeliveryOrderFulfillmentAction,
     updateDeliveryOrder,
 } from '@/lib/api'
 
@@ -24,6 +26,52 @@ const DELIVERY_ORDER_STATUS_OPTIONS: Array<{ value: DeliveryOrderStatus; label: 
     { value: 'rescheduled', label: 'Rescheduled' },
     { value: 'cancelled', label: 'Cancelled' },
 ]
+
+const FULFILLMENT_ACTION_OPTIONS: Array<{ action: AdminFulfillmentAction; label: string; helpText: string }> = [
+    {
+        action: 'mark_partially_collected',
+        label: 'Partially collect',
+        helpText: 'Use this when only some items have been collected.',
+    },
+    {
+        action: 'mark_collected_and_close',
+        label: 'Collect & close',
+        helpText: 'Use this when all items have been collected and the service should be closed.',
+    },
+]
+
+function fulfillmentActionRequiresNote(action: AdminFulfillmentAction) {
+    return action === 'mark_collected_and_close'
+}
+
+function getFulfillmentActionConfirmation(action: AdminFulfillmentAction) {
+    if (action === 'mark_partially_collected') return 'Confirm partially collected?'
+    return 'Confirm collected and close service?'
+}
+
+function isAdminFulfillmentAction(value: string): value is AdminFulfillmentAction {
+    return value === 'mark_partially_collected' || value === 'mark_collected_and_close'
+}
+
+function toFulfillmentActionLabel(action: string | null) {
+    if (!action) return '-'
+    const match = FULFILLMENT_ACTION_OPTIONS.find((option) => option.action === action)
+    if (match) return match.label
+    if (action === 'request_offboarding') return 'Offboarding requested'
+    if (action === 'force_offboarding') return 'Offboarding requested'
+    return toStatusLabel(action)
+}
+
+function canRunFulfillmentAction(
+    action: AdminFulfillmentAction,
+    serviceState: string | null,
+    collectionStatus: string | null,
+) {
+    if (action === 'mark_partially_collected') {
+        return serviceState === 'offboarding_requested' && collectionStatus === 'not_collected'
+    }
+    return serviceState === 'offboarding_requested' && (collectionStatus === 'not_collected' || collectionStatus === 'partially_collected')
+}
 
 function getStatusVariant(status: string | null): 'default' | 'success' | 'warning' | 'error' | 'outline' {
     const normalizedStatus = status?.toLowerCase()
@@ -43,11 +91,25 @@ function formatSubscriptionId(value: string) {
     return normalized.slice(0, 8)
 }
 
+function getOrdinalDay(day: number) {
+    const mod100 = day % 100
+    if (mod100 >= 11 && mod100 <= 13) return `${day}th`
+    const mod10 = day % 10
+    if (mod10 === 1) return `${day}st`
+    if (mod10 === 2) return `${day}nd`
+    if (mod10 === 3) return `${day}rd`
+    return `${day}th`
+}
+
 function formatDate(value: string | null) {
     if (!value) return '-'
     const parsed = new Date(value)
     if (Number.isNaN(parsed.getTime())) return '-'
-    return parsed.toLocaleString()
+    const day = getOrdinalDay(parsed.getDate())
+    const month = parsed.toLocaleString('en-US', { month: 'long' })
+    const year = parsed.getFullYear()
+    const time = parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    return `${day} ${month} ${year}, ${time}`
 }
 
 function toStatusLabel(status: string | null) {
@@ -71,6 +133,7 @@ export default function DeliveryOrdersPage() {
     const [selectedDeliveryOrderId, setSelectedDeliveryOrderId] = useState<string | null>(null)
     const [selectedDeliveryOrder, setSelectedDeliveryOrder] = useState<AdminDeliveryOrderDetail | null>(null)
     const [detailMode, setDetailMode] = useState<'view' | 'edit'>('view')
+    const [fulfillmentMode, setFulfillmentMode] = useState<'view' | 'edit'>('view')
     const [detailLoading, setDetailLoading] = useState(false)
     const [detailSaving, setDetailSaving] = useState(false)
     const [detailError, setDetailError] = useState<string | null>(null)
@@ -78,6 +141,10 @@ export default function DeliveryOrdersPage() {
     const [failureReasonDraft, setFailureReasonDraft] = useState('')
     const [rescheduledAtDraft, setRescheduledAtDraft] = useState('')
     const [cancelledReasonDraft, setCancelledReasonDraft] = useState('')
+    const [fulfillmentActionDraft, setFulfillmentActionDraft] = useState<AdminFulfillmentAction | ''>('')
+    const [fulfillmentNoteDraft, setFulfillmentNoteDraft] = useState('')
+    const [fulfillmentActionSaving, setFulfillmentActionSaving] = useState<AdminFulfillmentAction | null>(null)
+    const [fulfillmentActionError, setFulfillmentActionError] = useState<string | null>(null)
 
     const hasCustomFilters = search.trim().length > 0 || statusFilter !== 'all'
 
@@ -117,9 +184,14 @@ export default function DeliveryOrdersPage() {
         setSelectedDeliveryOrderId(null)
         setSelectedDeliveryOrder(null)
         setDetailMode('view')
+        setFulfillmentMode('view')
         setDetailLoading(false)
         setDetailSaving(false)
         setDetailError(null)
+        setFulfillmentActionDraft('')
+        setFulfillmentNoteDraft('')
+        setFulfillmentActionSaving(null)
+        setFulfillmentActionError(null)
         resetDrafts()
     }, [resetDrafts])
 
@@ -134,7 +206,12 @@ export default function DeliveryOrdersPage() {
         setSelectedDeliveryOrderId(deliveryOrderId)
         setSelectedDeliveryOrder(null)
         setDetailMode(mode)
+        setFulfillmentMode('view')
         setDetailError(null)
+        setFulfillmentActionDraft('')
+        setFulfillmentActionError(null)
+        setFulfillmentActionSaving(null)
+        setFulfillmentNoteDraft('')
         setDetailLoading(true)
         try {
             const detail = await getDeliveryOrder(deliveryOrderId)
@@ -173,7 +250,7 @@ export default function DeliveryOrdersPage() {
             setDetailMode('view')
             await loadData()
         } catch (saveError) {
-            setDetailError(saveError instanceof Error ? saveError.message : 'Failed to update delivery order')
+            alert(saveError instanceof Error ? saveError.message : 'Failed to update delivery order')
         } finally {
             setDetailSaving(false)
         }
@@ -187,43 +264,103 @@ export default function DeliveryOrdersPage() {
         selectedDeliveryOrderId,
     ])
 
+    const currentServiceState = selectedDeliveryOrder?.subscription?.service_state ?? null
+    const currentCollectionStatus = selectedDeliveryOrder?.subscription?.collection_status ?? null
+    const hasSubscriptionContext = selectedDeliveryOrder?.subscription != null
+    const normalizedBillingStatus = selectedDeliveryOrder?.subscription?.billing_status?.toLowerCase() ?? null
+    const isBillingCancelled = normalizedBillingStatus === 'cancelled'
+    const hasStripeCancellationSignal = isBillingCancelled
+        || currentServiceState === 'offboarding_requested'
+        || currentServiceState === 'closed'
+    const canOpenCollectionUpdates = hasSubscriptionContext && hasStripeCancellationSignal
+    const collectionUpdateDisabledTooltip = !hasSubscriptionContext
+        ? 'Collection updates are unavailable because this delivery order has no subscription context.'
+        : 'Available only after Stripe cancellation (Cancel now / Cancel at period end), or when billing status becomes Cancelled.'
+
+    const saveFulfillmentUpdate = useCallback(async () => {
+        if (!selectedDeliveryOrderId) return
+        if (!isAdminFulfillmentAction(fulfillmentActionDraft)) {
+            setFulfillmentActionError('Please choose an action before saving.')
+            return
+        }
+
+        const note = fulfillmentNoteDraft.trim()
+        if (!canRunFulfillmentAction(fulfillmentActionDraft, currentServiceState, currentCollectionStatus)) {
+            setFulfillmentActionError('This action is not available yet. Offboarding must be requested before collection updates.')
+            return
+        }
+        if (fulfillmentActionRequiresNote(fulfillmentActionDraft) && !note) {
+            setFulfillmentActionError(`Please add a note for ${toFulfillmentActionLabel(fulfillmentActionDraft)}.`)
+            return
+        }
+
+        const confirmed = window.confirm(getFulfillmentActionConfirmation(fulfillmentActionDraft))
+        if (!confirmed) return
+
+        setFulfillmentActionError(null)
+        setFulfillmentActionSaving(fulfillmentActionDraft)
+        try {
+            const result = await runDeliveryOrderFulfillmentAction(
+                selectedDeliveryOrderId,
+                fulfillmentActionDraft,
+                note || undefined,
+            )
+            setSelectedDeliveryOrder(result.delivery_order)
+            setFulfillmentMode('view')
+            setFulfillmentActionDraft('')
+            setFulfillmentNoteDraft('')
+            await loadData()
+        } catch (actionError) {
+            setFulfillmentActionError(actionError instanceof Error ? actionError.message : 'Unable to save collection update')
+        } finally {
+            setFulfillmentActionSaving(null)
+        }
+    }, [
+        currentCollectionStatus,
+        currentServiceState,
+        fulfillmentActionDraft,
+        fulfillmentNoteDraft,
+        loadData,
+        selectedDeliveryOrderId,
+    ])
+
     const columns: Array<{
         header: string
         accessorKey?: keyof AdminDeliveryOrder
         cell?: (row: AdminDeliveryOrder) => ReactNode
     }> = [
-        {
-            header: 'Delivery Order ID',
-            accessorKey: 'id',
-            cell: (row) => <span className="font-semibold tracking-wide text-text-light">{formatDeliveryOrderId(row.id)}</span>,
-        },
-        {
-            header: 'Subscription',
-            accessorKey: 'subscription_id',
-            cell: (row) => <span className="font-semibold tracking-wide text-text-light">{formatSubscriptionId(row.subscription_id)}</span>,
-        },
-        { header: 'Customer', accessorKey: 'customer' },
-        { header: 'Items', accessorKey: 'items' },
-        {
-            header: 'Delivery Status',
-            accessorKey: 'do_status',
-            cell: (row) => <Badge variant={getStatusVariant(row.do_status)}>{row.do_status}</Badge>,
-        },
-        {
-            header: 'Billing Status',
-            accessorKey: 'billing_status',
-            cell: (row) => <Badge variant={getStatusVariant(row.billing_status)}>{row.billing_status ?? '-'}</Badge>,
-        },
-        {
-            header: 'Service State',
-            accessorKey: 'service_state',
-            cell: (row) => <span className="text-sm text-text-light">{toStatusLabel(row.service_state)}</span>,
-        },
-        {
-            header: 'Created',
-            accessorKey: 'date',
-        },
-    ]
+            {
+                header: 'Delivery Order ID',
+                accessorKey: 'id',
+                cell: (row) => <span className="font-semibold tracking-wide text-text-light">{formatDeliveryOrderId(row.id)}</span>,
+            },
+            {
+                header: 'Subscription',
+                accessorKey: 'subscription_id',
+                cell: (row) => <span className="font-semibold tracking-wide text-text-light">{formatSubscriptionId(row.subscription_id)}</span>,
+            },
+            { header: 'Customer', accessorKey: 'customer' },
+            { header: 'Items', accessorKey: 'items' },
+            {
+                header: 'Delivery Status',
+                accessorKey: 'do_status',
+                cell: (row) => <Badge variant={getStatusVariant(row.do_status)}>{row.do_status}</Badge>,
+            },
+            {
+                header: 'Billing Status',
+                accessorKey: 'billing_status',
+                cell: (row) => <Badge variant={getStatusVariant(row.billing_status)}>{row.billing_status ?? '-'}</Badge>,
+            },
+            {
+                header: 'Service State',
+                accessorKey: 'service_state',
+                cell: (row) => <span className="text-sm text-text-light">{toStatusLabel(row.service_state)}</span>,
+            },
+            {
+                header: 'Created',
+                accessorKey: 'date',
+            },
+        ]
 
     const actions = (row: AdminDeliveryOrder) => (
         <div className="flex items-center justify-end gap-2">
@@ -341,7 +478,7 @@ export default function DeliveryOrdersPage() {
             {selectedDeliveryOrderId && (
                 <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/55 p-4 backdrop-blur-sm md:p-8">
                     <div className="mx-auto w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-                        <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-6 py-5">
+                        <div className="border-b border-slate-200 bg-linear-to-r from-slate-50 via-white to-slate-50 px-6 py-5">
                             <div className="flex items-start justify-between gap-4">
                                 <div>
                                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-subtext-light">
@@ -424,6 +561,101 @@ export default function DeliveryOrdersPage() {
                                             <p className="mt-2 text-sm text-text-light">{selectedDeliveryOrder.subscription?.delivery.address ?? '-'}</p>
                                             <p className="mt-3 text-xs text-subtext-light">Created: {formatDate(selectedDeliveryOrder.created_at)}</p>
                                             <p className="mt-1 text-xs text-subtext-light">Updated: {formatDate(selectedDeliveryOrder.updated_at)}</p>
+                                        </div>
+                                    </div>
+
+                                    {detailMode === 'view' || fulfillmentMode === 'view' ? (
+                                        <div className="flex flex-wrap justify-end gap-2">
+                                            {detailMode === 'view' ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setDetailMode('edit')}
+                                                    className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-dark"
+                                                >
+                                                    <Pencil className="h-4 w-4" />
+                                                    Update Delivery Status
+                                                </button>
+                                            ) : null}
+                                            {fulfillmentMode === 'view' ? (
+                                                <div
+                                                    className={`relative inline-flex ${canOpenCollectionUpdates ? '' : 'group cursor-not-allowed'}`}
+                                                >
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setFulfillmentMode('edit')
+                                                            setFulfillmentActionDraft('')
+                                                            setFulfillmentActionError(null)
+                                                        }}
+                                                        disabled={!canOpenCollectionUpdates}
+                                                        className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50 disabled:pointer-events-none"
+                                                        aria-label="Update Collection Status"
+                                                    >
+                                                        <Pencil className="h-4 w-4" />
+                                                        Update Collection Status
+                                                    </button>
+                                                    {!canOpenCollectionUpdates ? (
+                                                        <div
+                                                            role="tooltip"
+                                                            className="pointer-events-none absolute bottom-full right-0 z-20 mb-2 w-80 rounded-md border border-slate-200 bg-slate-900 px-3 py-2 text-xs text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
+                                                        >
+                                                            {collectionUpdateDisabledTooltip}
+                                                            <span
+                                                                className="absolute -bottom-1 right-4 h-2 w-2 rotate-45 border-b border-r border-slate-200 bg-slate-900"
+                                                                aria-hidden="true"
+                                                            />
+                                                        </div>
+                                                    ) : null}
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
+
+                                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                        <div className="mb-3">
+                                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Audit Logs</p>
+                                            <p className="mt-1 text-xs text-subtext-light">
+                                                Tracks fulfillment actions applied to this delivery order.
+                                            </p>
+                                        </div>
+                                        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                                            <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+                                                <thead className="bg-slate-50">
+                                                    <tr>
+                                                        <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-subtext-light">Time</th>
+                                                        <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-subtext-light">Action</th>
+                                                        <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-subtext-light">Changes</th>
+                                                        <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-subtext-light">Note</th>
+                                                        <th scope="col" className="px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-subtext-light">Updated By</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100">
+                                                    {selectedDeliveryOrder.fulfillment_events.length > 0 ? (
+                                                        selectedDeliveryOrder.fulfillment_events.map((event) => (
+                                                            <tr key={event.id}>
+                                                                <td className="whitespace-nowrap px-3 py-2 text-xs text-subtext-light">{formatDate(event.created_at)}</td>
+                                                                <td className="whitespace-nowrap px-3 py-2 font-medium text-text-light">{toFulfillmentActionLabel(event.action)}</td>
+                                                                <td className="px-3 py-2 text-xs text-subtext-light">
+                                                                    <p>
+                                                                        Service: {toStatusLabel(event.from_service_state)} {'->'} {toStatusLabel(event.to_service_state)}
+                                                                    </p>
+                                                                    <p>
+                                                                        Collection: {toStatusLabel(event.from_collection_status)} {'->'} {toStatusLabel(event.to_collection_status)}
+                                                                    </p>
+                                                                </td>
+                                                                <td className="px-3 py-2 text-xs text-text-light">{event.note ?? '-'}</td>
+                                                                <td className="whitespace-nowrap px-3 py-2 text-xs text-subtext-light">{event.actor_label}</td>
+                                                            </tr>
+                                                        ))
+                                                    ) : (
+                                                        <tr>
+                                                            <td colSpan={5} className="px-3 py-5 text-center text-sm text-subtext-light">
+                                                                No audit logs recorded yet.
+                                                            </td>
+                                                        </tr>
+                                                    )}
+                                                </tbody>
+                                            </table>
                                         </div>
                                     </div>
 
@@ -519,18 +751,117 @@ export default function DeliveryOrdersPage() {
                                                 </button>
                                             </div>
                                         </div>
-                                    ) : (
-                                        <div className="flex justify-end">
-                                            <button
-                                                type="button"
-                                                onClick={() => setDetailMode('edit')}
-                                                className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-primary-dark"
-                                            >
-                                                <Pencil className="h-4 w-4" />
-                                                Update Delivery Status
-                                            </button>
+                                    ) : null}
+
+                                    {fulfillmentMode === 'edit' ? (
+                                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                            <div>
+                                                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Collection Updates</p>
+                                                <p className="mt-1 text-sm text-subtext-light">
+                                                    Update pickup progress after a cancellation starts offboarding.
+                                                </p>
+                                                <p className="mt-1 text-xs text-subtext-light">
+                                                    Current: Collection {toStatusLabel(currentCollectionStatus)} | Service {toStatusLabel(currentServiceState)}
+                                                </p>
+                                            </div>
+
+                                            <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+                                                <p className="text-sm text-subtext-light">
+                                                    Choose one update option below.
+                                                </p>
+                                                <div className="mt-4 grid gap-4">
+                                                    <div>
+                                                        <label htmlFor="fulfillment-action" className="block text-xs uppercase tracking-wide text-subtext-light">
+                                                            Collection Update
+                                                        </label>
+                                                        <select
+                                                            id="fulfillment-action"
+                                                            value={fulfillmentActionDraft}
+                                                            onChange={(event) => {
+                                                                setFulfillmentActionDraft(event.target.value as AdminFulfillmentAction | '')
+                                                                if (fulfillmentActionError) setFulfillmentActionError(null)
+                                                            }}
+                                                            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/50"
+                                                            disabled={!hasSubscriptionContext || fulfillmentActionSaving !== null}
+                                                        >
+                                                            <option value="">Select an option</option>
+                                                            {FULFILLMENT_ACTION_OPTIONS.map((option) => {
+                                                                const isAllowed = hasSubscriptionContext
+                                                                    && canRunFulfillmentAction(option.action, currentServiceState, currentCollectionStatus)
+                                                                return (
+                                                                    <option key={option.action} value={option.action} disabled={!isAllowed}>
+                                                                        {isAllowed ? option.label : `${option.label} (Subscription is currently active)`}
+                                                                    </option>
+                                                                )
+                                                            })}
+                                                        </select>
+                                                    </div>
+
+                                                    <div>
+                                                        <label htmlFor="fulfillment-note" className="block text-xs uppercase tracking-wide text-subtext-light">
+                                                            Note
+                                                        </label>
+                                                        <textarea
+                                                            id="fulfillment-note"
+                                                            value={fulfillmentNoteDraft}
+                                                            onChange={(event) => {
+                                                                setFulfillmentNoteDraft(event.target.value)
+                                                                if (fulfillmentActionError) setFulfillmentActionError(null)
+                                                            }}
+                                                            rows={3}
+                                                            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/50"
+                                                            placeholder="Add details for your team. Required for Collect & close."
+                                                            disabled={!hasSubscriptionContext || fulfillmentActionSaving !== null}
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div className="mt-3 space-y-1">
+                                                    {isAdminFulfillmentAction(fulfillmentActionDraft) ? (
+                                                        <p className="text-xs text-subtext-light">
+                                                            {FULFILLMENT_ACTION_OPTIONS.find((option) => option.action === fulfillmentActionDraft)?.helpText}
+                                                        </p>
+                                                    ) : (
+                                                        <p className="text-xs text-subtext-light">
+                                                            Partially collect = some items returned. Collect & close = all items returned and service closed.
+                                                        </p>
+                                                    )}
+                                                    {isAdminFulfillmentAction(fulfillmentActionDraft) && !canRunFulfillmentAction(fulfillmentActionDraft, currentServiceState, currentCollectionStatus) ? (
+                                                        <p className="text-xs text-amber-700">
+                                                            This option becomes available after offboarding is requested.
+                                                        </p>
+                                                    ) : null}
+                                                    {isAdminFulfillmentAction(fulfillmentActionDraft) && fulfillmentActionRequiresNote(fulfillmentActionDraft) ? (
+                                                        <p className="text-xs text-subtext-light">A note is required for this option.</p>
+                                                    ) : null}
+                                                    {fulfillmentActionError ? <p className="text-xs text-red-700">{fulfillmentActionError}</p> : null}
+                                                </div>
+
+                                                <div className="mt-5 flex justify-end gap-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setFulfillmentMode('view')
+                                                            setFulfillmentActionDraft('')
+                                                            setFulfillmentNoteDraft('')
+                                                            setFulfillmentActionError(null)
+                                                        }}
+                                                        className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light hover:bg-slate-50"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void saveFulfillmentUpdate()}
+                                                        disabled={!hasSubscriptionContext || fulfillmentActionSaving !== null}
+                                                        className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-50"
+                                                    >
+                                                        {fulfillmentActionSaving ? 'Saving...' : 'Save Collection Update'}
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
-                                    )}
+                                    ) : null}
                                 </div>
                             ) : (
                                 <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">

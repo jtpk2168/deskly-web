@@ -2,6 +2,7 @@ import { BillingCheckoutItemInput, NormalizedBillingCheckoutItem } from './types
 import { toMoney } from './money'
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const MIXED_ITEM_DURATIONS_ERROR = 'Mixed item durations are not allowed. Please create separate orders for different durations.'
 
 export function parseUUID(value: unknown) {
     if (typeof value !== 'string') return null
@@ -103,3 +104,24 @@ export function parseCheckoutItems(value: unknown) {
     return { items: normalizedItems, error: null as string | null }
 }
 
+export function resolveUniformItemDuration(items: Array<{ duration_months: number | null | undefined }>) {
+    let durationMonths: number | null = null
+
+    for (const item of items) {
+        if (item.duration_months == null) continue
+
+        const normalizedDuration = Number(item.duration_months)
+        if (!Number.isInteger(normalizedDuration) || normalizedDuration <= 0) continue
+
+        if (durationMonths == null) {
+            durationMonths = normalizedDuration
+            continue
+        }
+
+        if (durationMonths !== normalizedDuration) {
+            return { durationMonths: null as number | null, error: MIXED_ITEM_DURATIONS_ERROR }
+        }
+    }
+
+    return { durationMonths, error: null as string | null }
+}

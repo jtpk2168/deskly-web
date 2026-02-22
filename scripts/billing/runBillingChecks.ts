@@ -3,7 +3,7 @@ import { calculateCommitmentEndDate } from '../../src/lib/billing/commitment'
 import { findLockedBillingFieldEdits, hasLockedBillingFieldEdits } from '../../src/lib/billing/manualEditGuard'
 import { mapStripeSubscriptionStatus } from '../../src/lib/billing/stripeWebhook'
 import { calculateSstQuote } from '../../src/lib/billing/tax'
-import { parseCheckoutItems } from '../../src/lib/billing/validation'
+import { MIXED_ITEM_DURATIONS_ERROR, parseCheckoutItems, resolveUniformItemDuration } from '../../src/lib/billing/validation'
 
 function testSstQuote() {
     const quote = calculateSstQuote(100, 'myr')
@@ -68,12 +68,29 @@ function testManualBillingFieldGuard() {
     )
 }
 
+function testUniformDurationValidation() {
+    const uniform = resolveUniformItemDuration([
+        { duration_months: 24 },
+        { duration_months: 24 },
+    ])
+    assert.equal(uniform.error, null)
+    assert.equal(uniform.durationMonths, 24)
+
+    const mixed = resolveUniformItemDuration([
+        { duration_months: 12 },
+        { duration_months: 24 },
+    ])
+    assert.equal(mixed.error, MIXED_ITEM_DURATIONS_ERROR)
+    assert.equal(mixed.durationMonths, null)
+}
+
 function run() {
     testSstQuote()
     testCommitmentCalculation()
     testCheckoutItemValidation()
     testStripeStatusMapping()
     testManualBillingFieldGuard()
+    testUniformDurationValidation()
     console.log('Billing checks passed')
 }
 

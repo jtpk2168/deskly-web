@@ -3,6 +3,7 @@ import { supabaseServer } from '../../../../../lib/supabaseServer'
 import { successResponse, errorResponse } from '../../../../../lib/apiResponse'
 import { parsePaginationParams } from '@/lib/pagination'
 import { parseAdminOrderFilters } from '@/lib/adminOrders'
+import { normalizeBillingStatus } from '@/lib/billing/types'
 
 type SubscriptionRecord = {
     id: string
@@ -145,13 +146,14 @@ async function mapSubscriptionRecords(records: SubscriptionRecord[]) {
         records.map(async (sub) => {
             const profile = unwrapSingle(sub.profiles)
             const bundle = unwrapSingle(sub.bundles)
+            const normalizedStatus = normalizeBillingStatus(sub.status)
             return {
                 id: sub.id,
                 customer: await resolveCustomerName(sub.user_id, profile?.full_name ?? null),
                 items: itemSummaryMap.get(sub.id) ?? bundle?.name ?? 'No items captured',
                 total: parseMoney(sub.monthly_total),
-                billing_status: sub.status,
-                status: sub.status,
+                billing_status: normalizedStatus,
+                status: normalizedStatus,
                 date: new Date(sub.created_at).toLocaleDateString(),
             } as SubscriptionListItem
         })

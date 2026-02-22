@@ -511,7 +511,11 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
             provider_subscription_id: stripeSnapshot.providerSubscriptionId,
         }
 
-        const mirroredEndDate = stripeSnapshot.cancelledAt ?? stripeSnapshot.currentPeriodEnd
+        // Stripe sets `canceled_at` when cancellation is scheduled at period end,
+        // but the actual end of service is `current_period_end`.
+        const mirroredEndDate = stripeSnapshot.cancelAtPeriodEnd
+            ? (stripeSnapshot.currentPeriodEnd ?? stripeSnapshot.cancelledAt)
+            : (stripeSnapshot.cancelledAt ?? stripeSnapshot.currentPeriodEnd)
         if (mirroredEndDate !== null) {
             updatePayload.end_date = mirroredEndDate
         }
