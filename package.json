@@ -7,7 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "check:billing": "npx --no-install tsc --pretty false --module commonjs --target es2020 --skipLibCheck --esModuleInterop --outDir /tmp/deskly-billing-check scripts/billing/runBillingChecks.ts && node /tmp/deskly-billing-check/scripts/billing/runBillingChecks.js"
+    "check:billing": "npx --no-install tsc --pretty false --module commonjs --target es2020 --skipLibCheck --esModuleInterop --outDir /tmp/deskly-billing-check scripts/billing/runBillingChecks.ts && node /tmp/deskly-billing-check/scripts/billing/runBillingChecks.js",
+    "check:api-tests:core": "npx --no-install tsc --pretty false --module commonjs --target es2020 --skipLibCheck --esModuleInterop --outDir /tmp/deskly-api-tests-check scripts/api-tests/runner.ts && node /tmp/deskly-api-tests-check/runner.js --lane local-core",
+    "check:api-tests:full": "npx --no-install tsc --pretty false --module commonjs --target es2020 --skipLibCheck --esModuleInterop --outDir /tmp/deskly-api-tests-check scripts/api-tests/runner.ts && node /tmp/deskly-api-tests-check/runner.js --lane local-full",
+    "check:api-tests:status": "npx --no-install tsc --pretty false --module commonjs --target es2020 --skipLibCheck --esModuleInterop --outDir .tmp/deskly-api-tests-status-check scripts/api-tests/status/runner.ts && node .tmp/deskly-api-tests-status-check/status/runner.js --lane local-status",
+    "check:api-tests:status-deep": "npx --no-install tsc --pretty false --module commonjs --target es2020 --skipLibCheck --esModuleInterop --outDir .tmp/deskly-api-tests-status-check scripts/api-tests/status/runner.ts && node .tmp/deskly-api-tests-status-check/status/runner.js --lane local-status-deep",
+    "check:api-tests:staging-sandbox-smoke": "npx --no-install tsc --pretty false --module commonjs --target es2020 --skipLibCheck --esModuleInterop --outDir /tmp/deskly-api-tests-check scripts/api-tests/runner.ts && node /tmp/deskly-api-tests-check/runner.js --lane staging-sandbox-smoke",
+    "check:api-tests:staging-smoke": "npm run check:api-tests:staging-sandbox-smoke"
   },
   "dependencies": {
     "@supabase/ssr": "^0.8.0",
