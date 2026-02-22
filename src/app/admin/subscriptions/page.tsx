@@ -1,11 +1,20 @@
 'use client'
 
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
-import { Eye, X } from 'lucide-react'
+import { Eye } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { AdminFilterPanel } from '@/components/admin/shared/AdminFilterPanel'
+import { AdminModal } from '@/components/admin/shared/AdminModal'
+import { AdminPageHeader } from '@/components/admin/shared/AdminPageHeader'
+import { ErrorState } from '@/components/admin/shared/ErrorState'
+import { IconActionButton } from '@/components/admin/shared/IconActionButton'
+import { LoadingState } from '@/components/admin/shared/LoadingState'
 import { DataTable } from '@/components/ui/DataTable'
 import { Badge } from '@/components/ui/Badge'
 import { PaginationControls } from '@/components/ui/PaginationControls'
+import { SUBSCRIPTION_STATUS_FILTER_OPTIONS } from '@/lib/admin-ui/constants'
+import { formatAddress, formatCurrency, formatDate, formatDateTime, formatShortId } from '@/lib/admin-ui/formatters'
+import { getBillingStatusVariant } from '@/lib/admin-ui/statusVariants'
 import {
     AdminOrderSortColumn,
     AdminOrderStatus,
@@ -28,73 +37,10 @@ type ScheduledCancellationMemory = {
     periodEnd: string | null
 }
 
-function getStatusVariant(status: string | null): 'default' | 'success' | 'warning' | 'error' | 'outline' {
-    const normalizedStatus = status?.toLowerCase()
-    if (normalizedStatus === 'active') return 'success'
-    if (normalizedStatus === 'pending_payment') return 'warning'
-    if (normalizedStatus === 'payment_failed') return 'error'
-    if (normalizedStatus === 'cancelled') return 'error'
-    return 'default'
-}
-
-function formatCurrency(value: number | null) {
-    return `RM ${value?.toFixed(2) ?? '0.00'}`
-}
-
 function formatCurrencyOrDash(value: number | null) {
     if (value == null) return '-'
-    return formatCurrency(value)
+    return formatCurrency(value, 'RM', 'RM 0.00')
 }
-
-function getOrdinalDay(day: number) {
-    const mod100 = day % 100
-    if (mod100 >= 11 && mod100 <= 13) return `${day}th`
-    const mod10 = day % 10
-    if (mod10 === 1) return `${day}st`
-    if (mod10 === 2) return `${day}nd`
-    if (mod10 === 3) return `${day}rd`
-    return `${day}th`
-}
-
-function formatLongDate(parsed: Date) {
-    const day = getOrdinalDay(parsed.getDate())
-    const month = parsed.toLocaleString('en-US', { month: 'long' })
-    const year = parsed.getFullYear()
-    return `${day} ${month} ${year}`
-}
-
-function formatDate(value: string | null) {
-    if (!value) return '-'
-    const parsed = new Date(value)
-    if (Number.isNaN(parsed.getTime())) return '-'
-    return formatLongDate(parsed)
-}
-
-function formatDateTime(value: string | null) {
-    if (!value) return '-'
-    const parsed = new Date(value)
-    if (Number.isNaN(parsed.getTime())) return '-'
-    const time = parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-    return `${formatLongDate(parsed)}, ${time}`
-}
-
-function formatAddress(value: string | null) {
-    if (!value || value.trim().length === 0) return '-'
-    return value
-}
-
-function formatId(value: string) {
-    const normalized = value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
-    return normalized.slice(0, 8)
-}
-
-const STATUS_FILTER_OPTIONS: Array<{ value: 'all' | AdminOrderStatus; label: string }> = [
-    { value: 'all', label: 'All Status' },
-    { value: 'pending_payment', label: 'Pending Payment' },
-    { value: 'payment_failed', label: 'Payment Failed' },
-    { value: 'active', label: 'Active' },
-    { value: 'cancelled', label: 'Cancelled' },
-]
 
 function getSortIndicator(activeSortBy: AdminOrderSortColumn, activeSortDir: 'asc' | 'desc', column: AdminOrderSortColumn) {
     if (activeSortBy !== column) return '↕'
@@ -301,7 +247,7 @@ export default function SubscriptionsPage() {
             header: 'Subscription ID',
             accessorKey: 'id',
             cell: (row) => (
-                <span className="font-semibold tracking-wide text-text-light">{formatId(row.id)}</span>
+                <span className="font-semibold tracking-wide text-text-light">{formatShortId(row.id)}</span>
             ),
         },
         { header: 'Customer', accessorKey: 'customer' },
@@ -330,51 +276,42 @@ export default function SubscriptionsPage() {
                 </button>
             ),
             accessorKey: 'status',
-            cell: (row) => <Badge variant={getStatusVariant(row.billing_status)}>{row.billing_status ?? '-'}</Badge>,
+            cell: (row) => <Badge variant={getBillingStatusVariant(row.billing_status)}>{row.billing_status ?? '-'}</Badge>,
         },
     ]
 
     const actions = (row: AdminSubscription) => (
         <div className="flex items-center justify-end gap-2">
-            <button
-                type="button"
+            <IconActionButton
+                label={`View subscription ${formatShortId(row.id)}`}
                 onClick={() => void openDetails(row.id)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-subtext-light transition hover:border-primary/40 hover:text-primary"
-                aria-label={`View subscription ${formatId(row.id)}`}
-            >
-                <Eye className="h-4 w-4" />
-            </button>
+                icon={Eye}
+            />
         </div>
     )
 
     return (
         <div className="space-y-6">
-            <section className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="pointer-events-none absolute -right-14 -top-14 h-44 w-44 rounded-full bg-primary/10 blur-3xl" />
-                <div className="relative">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Subscriptions</p>
-                            <h1 className="mt-1 text-2xl font-bold text-text-light">Billing Subscriptions</h1>
-                            <p className="mt-1 text-sm text-subtext-light">Review Stripe-synced billing state and run safe billing actions.</p>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => void loadData()}
-                            disabled={loading}
-                            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            Refresh
-                        </button>
-                    </div>
-                </div>
-            </section>
+            <AdminPageHeader
+                eyebrow="Subscriptions"
+                title="Billing Subscriptions"
+                description="Review Stripe-synced billing state and run safe billing actions."
+                actions={(
+                    <button
+                        type="button"
+                        onClick={() => void loadData()}
+                        disabled={loading}
+                        className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        Refresh
+                    </button>
+                )}
+            />
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Filters</p>
-                    <p className="mt-1 text-sm text-subtext-light">Search by subscription ID, customer, items, and billing status.</p>
-                </div>
+            <AdminFilterPanel
+                title="Filters"
+                description="Search by subscription ID, customer, items, and billing status."
+            >
 
                 {userIdFilter ? (
                     <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
@@ -417,7 +354,7 @@ export default function SubscriptionsPage() {
                         }}
                         className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40"
                     >
-                        {STATUS_FILTER_OPTIONS.map((option) => (
+                        {SUBSCRIPTION_STATUS_FILTER_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>
                                 {option.label}
                             </option>
@@ -438,16 +375,12 @@ export default function SubscriptionsPage() {
                         Reset Filters
                     </button>
                 </div>
-            </section>
+            </AdminFilterPanel>
 
             {loading ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-subtext-light shadow-sm">
-                    Loading subscriptions...
-                </div>
+                <LoadingState message="Loading subscriptions..." />
             ) : error ? (
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                    {error}
-                </div>
+                <ErrorState message={error} />
             ) : (
                 <div className="space-y-4">
                     <DataTable
@@ -469,37 +402,17 @@ export default function SubscriptionsPage() {
                 </div>
             )}
 
-            {selectedSubscriptionId && (
-                <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/55 p-4 backdrop-blur-sm md:p-8">
-                    <div className="mx-auto w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-                        <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-6 py-5">
-                            <div className="flex items-start justify-between gap-4">
-                                <div>
-                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-subtext-light">
-                                        Subscription Details
-                                    </p>
-                                    <h2 className="mt-1 text-3xl font-bold tracking-tight text-text-light">
-                                        #{formatId(selectedSubscriptionId)}
-                                    </h2>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={closeDetails}
-                                    className="rounded-full border border-slate-200 bg-white p-2 text-subtext-light transition-colors hover:border-slate-300 hover:text-text-light"
-                                    aria-label="Close subscription details"
-                                >
-                                    <X className="h-5 w-5" />
-                                </button>
-                            </div>
-                        </div>
-
-                        <div className="max-h-[calc(100vh-13rem)] overflow-y-auto px-6 py-6">
+            <AdminModal
+                open={selectedSubscriptionId != null}
+                onClose={closeDetails}
+                eyebrow="Subscription Details"
+                title={selectedSubscriptionId ? `#${formatShortId(selectedSubscriptionId)}` : '#-'}
+                maxWidth="max-w-5xl"
+            >
                             {detailLoading ? (
-                                <div className="py-14 text-center text-sm text-subtext-light">Loading subscription details...</div>
+                                <LoadingState message="Loading subscription details..." />
                             ) : detailError ? (
-                                <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                                    {detailError}
-                                </div>
+                                <ErrorState message={detailError} />
                             ) : selectedSubscription ? (
                                 <div className="space-y-6">
                                     <div className="grid gap-4 lg:grid-cols-[1fr,1.45fr]">
@@ -613,7 +526,7 @@ export default function SubscriptionsPage() {
                                         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                                             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Billing Status</p>
                                             <div className="mt-2">
-                                                <Badge variant={getStatusVariant(selectedSubscription.billingStatus)}>
+                                                <Badge variant={getBillingStatusVariant(selectedSubscription.billingStatus)}>
                                                     {selectedSubscription.billingStatus ?? '-'}
                                                 </Badge>
                                             </div>
@@ -671,14 +584,9 @@ export default function SubscriptionsPage() {
                                     </div>
                                 </div>
                             ) : (
-                                <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                                    Subscription details are unavailable.
-                                </div>
+                                <ErrorState message="Subscription details are unavailable." />
                             )}
-                        </div>
-                    </div>
-                </div>
-            )}
+            </AdminModal>
         </div>
     )
 }

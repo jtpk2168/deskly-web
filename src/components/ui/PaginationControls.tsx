@@ -5,9 +5,15 @@ type PaginationControlsProps = {
     loading?: boolean
     onPageChange: (nextPage: number) => void
     onLimitChange: (nextLimit: number) => void
+    pageSizeOptions?: number[]
+    className?: string
 }
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50]
+
+function toClassName(...parts: Array<string | undefined>) {
+    return parts.filter(Boolean).join(' ')
+}
 
 export function PaginationControls({
     page,
@@ -16,8 +22,13 @@ export function PaginationControls({
     loading = false,
     onPageChange,
     onLimitChange,
+    pageSizeOptions = PAGE_SIZE_OPTIONS,
+    className,
 }: PaginationControlsProps) {
     const safeLimit = Math.max(1, limit)
+    const normalizedOptions = pageSizeOptions.length > 0
+        ? [...new Set([...pageSizeOptions, safeLimit])].sort((a, b) => a - b)
+        : [...new Set([...PAGE_SIZE_OPTIONS, safeLimit])].sort((a, b) => a - b)
     const totalPages = Math.max(1, Math.ceil(total / safeLimit))
     const clampedPage = Math.min(Math.max(1, page), totalPages)
     const start = total === 0 ? 0 : (clampedPage - 1) * safeLimit + 1
@@ -26,7 +37,7 @@ export function PaginationControls({
     const canGoNext = clampedPage < totalPages && !loading
 
     return (
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
+        <div className={toClassName('mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm', className)}>
             <p className="text-sm text-subtext-light">
                 Showing <span className="font-semibold text-text-light">{start}-{end}</span> of <span className="font-semibold text-text-light">{total}</span>
             </p>
@@ -40,7 +51,7 @@ export function PaginationControls({
                         disabled={loading}
                         className="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-text-light disabled:opacity-50"
                     >
-                        {PAGE_SIZE_OPTIONS.map((option) => (
+                        {normalizedOptions.map((option) => (
                             <option key={option} value={option}>
                                 {option}
                             </option>

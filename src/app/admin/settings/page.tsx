@@ -2,9 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { DatabaseZap, RefreshCw, Save, ShieldCheck } from 'lucide-react'
+import { AdminPageHeader } from '@/components/admin/shared/AdminPageHeader'
+import { ErrorState } from '@/components/admin/shared/ErrorState'
+import { LoadingState } from '@/components/admin/shared/LoadingState'
 import { Badge } from '@/components/ui/Badge'
 import { DataTable } from '@/components/ui/DataTable'
 import { PaginationControls } from '@/components/ui/PaginationControls'
+import { WEBHOOK_EVENT_STATUS_OPTIONS, WEBHOOK_PROVIDER_FILTER_OPTIONS } from '@/lib/admin-ui/constants'
+import { formatDateTime, formatSstRate, formatSyncAction, shorten } from '@/lib/admin-ui/formatters'
+import { getProviderVariant, getWebhookEventStatusVariant } from '@/lib/admin-ui/statusVariants'
 import {
     BillingCatalogSyncResult,
     BillingRuntimeConfig,
@@ -17,19 +23,6 @@ import {
 } from '@/lib/api'
 import type { ReactNode } from 'react'
 
-const STATUS_FILTER_OPTIONS: Array<{ value: 'all' | BillingWebhookEventStatus; label: string }> = [
-    { value: 'all', label: 'All Statuses' },
-    { value: 'received', label: 'Received' },
-    { value: 'processed', label: 'Processed' },
-    { value: 'failed', label: 'Failed' },
-]
-
-const PROVIDER_FILTER_OPTIONS: Array<{ value: 'all' | BillingWebhookEventProvider; label: string }> = [
-    { value: 'all', label: 'All Providers' },
-    { value: 'stripe', label: 'Stripe' },
-    { value: 'mock', label: 'Mock' },
-]
-
 type SettingsTab = 'general' | 'billing' | 'invoices'
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
@@ -37,36 +30,6 @@ const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
     { id: 'billing', label: 'Billing' },
     { id: 'invoices', label: 'Invoices' },
 ]
-
-function formatDateTime(value: string | null) {
-    if (!value) return '-'
-    const parsed = new Date(value)
-    if (Number.isNaN(parsed.getTime())) return '-'
-    return parsed.toLocaleString()
-}
-
-function formatSstRate(rate: number) {
-    return `${(rate * 100).toFixed(2)}%`
-}
-
-function getEventStatusVariant(status: BillingWebhookEventStatus): 'default' | 'success' | 'warning' | 'error' | 'outline' {
-    if (status === 'processed') return 'success'
-    if (status === 'received') return 'warning'
-    if (status === 'failed') return 'error'
-    return 'default'
-}
-
-function getProviderVariant(provider: string): 'default' | 'success' | 'warning' | 'error' | 'outline' {
-    if (provider === 'stripe') return 'outline'
-    if (provider === 'mock') return 'default'
-    return 'default'
-}
-
-function shorten(value: string | null, size = 12) {
-    if (!value) return '-'
-    if (value.length <= size) return value
-    return `${value.slice(0, size)}...`
-}
 
 function normalizeCsvProductIds(input: string) {
     const ids = input
@@ -76,10 +39,6 @@ function normalizeCsvProductIds(input: string) {
     return ids.length > 0 ? ids : undefined
 }
 
-function formatSyncAction(action: 'skipped' | 'created') {
-    if (action === 'created') return 'Created in Stripe'
-    return 'Already up to date'
-}
 
 export default function SettingsPage() {
     const [billingConfig, setBillingConfig] = useState<BillingRuntimeConfig | null>(null)
@@ -207,7 +166,7 @@ export default function SettingsPage() {
         {
             header: 'Status',
             accessorKey: 'status',
-            cell: (row) => <Badge variant={getEventStatusVariant(row.status)}>{row.status}</Badge>,
+            cell: (row) => <Badge variant={getWebhookEventStatusVariant(row.status)}>{row.status}</Badge>,
         },
         {
             header: 'Subscription',
@@ -241,16 +200,11 @@ export default function SettingsPage() {
 
     return (
         <div className="space-y-6">
-            <section className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="pointer-events-none absolute -right-14 -top-14 h-44 w-44 rounded-full bg-primary/10 blur-3xl" />
-                <div className="relative">
-                    <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Configuration</p>
-                        <h1 className="mt-1 text-2xl font-bold text-text-light">Settings</h1>
-                        <p className="mt-1 text-sm text-subtext-light">Manage billing runtime, Stripe sync, and webhook visibility.</p>
-                    </div>
-                </div>
-            </section>
+            <AdminPageHeader
+                eyebrow="Configuration"
+                title="Settings"
+                description="Manage billing runtime, Stripe sync, and webhook visibility."
+            />
 
             <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
                 <div className="flex flex-wrap gap-2">
@@ -291,9 +245,9 @@ export default function SettingsPage() {
                 </div>
 
                 {billingConfigError ? (
-                    <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{billingConfigError}</div>
+                    <ErrorState message={billingConfigError} />
                 ) : billingConfigLoading ? (
-                    <p className="text-sm text-subtext-light">Loading billing config...</p>
+                    <LoadingState message="Loading billing config..." />
                 ) : billingConfig ? (
                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
                         <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
@@ -467,7 +421,7 @@ export default function SettingsPage() {
                         }}
                         className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40"
                     >
-                        {PROVIDER_FILTER_OPTIONS.map((option) => (
+                        {WEBHOOK_PROVIDER_FILTER_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>{option.label}</option>
                         ))}
                     </select>
@@ -479,7 +433,7 @@ export default function SettingsPage() {
                         }}
                         className="rounded-xl border border-slate-300 px-3 py-2 text-sm text-text-light focus:outline-none focus:ring-2 focus:ring-primary/40"
                     >
-                        {STATUS_FILTER_OPTIONS.map((option) => (
+                        {WEBHOOK_EVENT_STATUS_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>{option.label}</option>
                         ))}
                     </select>
@@ -493,12 +447,8 @@ export default function SettingsPage() {
                     </button>
                 </div>
 
-                {eventsError ? (
-                    <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{eventsError}</div>
-                ) : null}
-                {eventsLoading ? (
-                    <p className="mb-3 text-sm text-subtext-light">Loading webhook events...</p>
-                ) : null}
+                {eventsError ? <ErrorState message={eventsError} /> : null}
+                {eventsLoading ? <LoadingState message="Loading webhook events..." /> : null}
 
                 <div className="space-y-4">
                     <DataTable columns={eventColumns} data={events} />

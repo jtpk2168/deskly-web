@@ -3,30 +3,15 @@
 import Link from 'next/link'
 import { type LucideIcon, ArrowRight, Box, RefreshCw, ShoppingCart, TrendingUp, Users } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { AdminPageHeader } from '@/components/admin/shared/AdminPageHeader'
+import { ErrorState } from '@/components/admin/shared/ErrorState'
+import {
+    formatCurrency as formatMoney,
+    formatDateTime,
+    formatRelativeTime,
+    toTitleStatus,
+} from '@/lib/admin-ui/formatters'
 import { AdminDashboard, getAdminDashboard } from '@/lib/api'
-
-function formatCurrency(value: number) {
-    return `RM ${value.toFixed(2)}`
-}
-
-function formatDateTime(value: string) {
-    const parsed = new Date(value)
-    if (Number.isNaN(parsed.getTime())) return '-'
-    return parsed.toLocaleString()
-}
-
-function formatRelativeTime(value: Date | null) {
-    if (!value) return 'Not synced yet'
-    return `Updated ${value.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-}
-
-function formatStatus(status: string | null) {
-    if (!status) return 'unknown'
-    return status
-        .split('_')
-        .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
-        .join(' ')
-}
 
 function getStatusClasses(status: string | null) {
     const normalized = (status ?? '').toLowerCase()
@@ -72,15 +57,11 @@ export default function AdminDashboardPage() {
 
     return (
         <div className="space-y-6">
-            <section className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="pointer-events-none absolute -right-16 -top-16 h-52 w-52 rounded-full bg-primary/15 blur-3xl" />
-                <div className="pointer-events-none absolute -left-16 -bottom-20 h-44 w-44 rounded-full bg-sky-100 blur-3xl" />
-                <div className="relative flex flex-wrap items-center justify-between gap-4">
-                    <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Admin Overview</p>
-                        <h1 className="mt-2 text-2xl font-bold text-text-light">Operations Dashboard</h1>
-                        <p className="mt-1 text-sm text-subtext-light">Live metrics from subscriptions, products, and users.</p>
-                    </div>
+            <AdminPageHeader
+                eyebrow="Admin Overview"
+                title="Operations Dashboard"
+                description="Live metrics from subscriptions, products, and users."
+                actions={(
                     <button
                         type="button"
                         onClick={loadDashboard}
@@ -90,13 +71,13 @@ export default function AdminDashboardPage() {
                         <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                         Refresh
                     </button>
-                </div>
-            </section>
+                )}
+            />
 
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <StatsCard
                     title="Total Revenue"
-                    value={loading ? 'Loading...' : formatCurrency(dashboard?.totalRevenue ?? 0)}
+                    value={loading ? 'Loading...' : formatMoney(dashboard?.totalRevenue ?? 0, 'RM', 'RM 0.00')}
                     subtitle="Recurring monthly revenue"
                     icon={TrendingUp}
                     tone="emerald"
@@ -124,11 +105,7 @@ export default function AdminDashboardPage() {
                 />
             </div>
 
-            {error ? (
-                <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                    {error}
-                </div>
-            ) : null}
+            {error ? <ErrorState message={error} /> : null}
 
             <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)]">
                 <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -171,7 +148,7 @@ export default function AdminDashboardPage() {
                                             </div>
                                         </div>
                                         <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getStatusClasses(activity.status)}`}>
-                                            {formatStatus(activity.status)}
+                                            {toTitleStatus(activity.status)}
                                         </span>
                                     </div>
                                 </li>
@@ -255,7 +232,7 @@ function StatsCard({
 
     return (
         <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-            <div className={`absolute left-0 right-0 top-0 h-1.5 bg-gradient-to-r ${toneClasses.bar}`} />
+            <div className={`absolute left-0 right-0 top-0 h-1.5 bg-linear-to-r ${toneClasses.bar}`} />
             <div className="flex items-center justify-between">
                 <div>
                     <p className="text-sm font-semibold text-subtext-light">{title}</p>

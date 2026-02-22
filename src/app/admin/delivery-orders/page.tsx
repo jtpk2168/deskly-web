@@ -1,10 +1,19 @@
 'use client'
 
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
-import { Eye, Pencil, X } from 'lucide-react'
+import { Eye, Pencil } from 'lucide-react'
+import { AdminFilterPanel } from '@/components/admin/shared/AdminFilterPanel'
+import { AdminModal } from '@/components/admin/shared/AdminModal'
+import { AdminPageHeader } from '@/components/admin/shared/AdminPageHeader'
+import { ErrorState } from '@/components/admin/shared/ErrorState'
+import { IconActionButton } from '@/components/admin/shared/IconActionButton'
+import { LoadingState } from '@/components/admin/shared/LoadingState'
 import { Badge } from '@/components/ui/Badge'
 import { DataTable } from '@/components/ui/DataTable'
 import { PaginationControls } from '@/components/ui/PaginationControls'
+import { DELIVERY_ORDER_STATUS_OPTIONS } from '@/lib/admin-ui/constants'
+import { formatDateTime, formatShortId, toTitleStatus } from '@/lib/admin-ui/formatters'
+import { getDeliveryStatusVariant } from '@/lib/admin-ui/statusVariants'
 import {
     AdminDeliveryOrder,
     AdminDeliveryOrderDetail,
@@ -16,16 +25,6 @@ import {
     runDeliveryOrderFulfillmentAction,
     updateDeliveryOrder,
 } from '@/lib/api'
-
-const DELIVERY_ORDER_STATUS_OPTIONS: Array<{ value: DeliveryOrderStatus; label: string }> = [
-    { value: 'confirmed', label: 'Confirmed' },
-    { value: 'dispatched', label: 'Dispatched' },
-    { value: 'delivered', label: 'Delivered' },
-    { value: 'partially_delivered', label: 'Partially Delivered' },
-    { value: 'failed', label: 'Failed' },
-    { value: 'rescheduled', label: 'Rescheduled' },
-    { value: 'cancelled', label: 'Cancelled' },
-]
 
 const FULFILLMENT_ACTION_OPTIONS: Array<{ action: AdminFulfillmentAction; label: string; helpText: string }> = [
     {
@@ -59,7 +58,7 @@ function toFulfillmentActionLabel(action: string | null) {
     if (match) return match.label
     if (action === 'request_offboarding') return 'Offboarding requested'
     if (action === 'force_offboarding') return 'Offboarding requested'
-    return toStatusLabel(action)
+    return toTitleStatus(action)
 }
 
 function canRunFulfillmentAction(
@@ -71,53 +70,6 @@ function canRunFulfillmentAction(
         return serviceState === 'offboarding_requested' && collectionStatus === 'not_collected'
     }
     return serviceState === 'offboarding_requested' && (collectionStatus === 'not_collected' || collectionStatus === 'partially_collected')
-}
-
-function getStatusVariant(status: string | null): 'default' | 'success' | 'warning' | 'error' | 'outline' {
-    const normalizedStatus = status?.toLowerCase()
-    if (normalizedStatus === 'delivered' || normalizedStatus === 'partially_delivered') return 'success'
-    if (normalizedStatus === 'dispatched' || normalizedStatus === 'confirmed' || normalizedStatus === 'rescheduled') return 'warning'
-    if (normalizedStatus === 'failed' || normalizedStatus === 'cancelled') return 'error'
-    return 'default'
-}
-
-function formatDeliveryOrderId(value: string) {
-    const normalized = value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
-    return normalized.slice(0, 8)
-}
-
-function formatSubscriptionId(value: string) {
-    const normalized = value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
-    return normalized.slice(0, 8)
-}
-
-function getOrdinalDay(day: number) {
-    const mod100 = day % 100
-    if (mod100 >= 11 && mod100 <= 13) return `${day}th`
-    const mod10 = day % 10
-    if (mod10 === 1) return `${day}st`
-    if (mod10 === 2) return `${day}nd`
-    if (mod10 === 3) return `${day}rd`
-    return `${day}th`
-}
-
-function formatDate(value: string | null) {
-    if (!value) return '-'
-    const parsed = new Date(value)
-    if (Number.isNaN(parsed.getTime())) return '-'
-    const day = getOrdinalDay(parsed.getDate())
-    const month = parsed.toLocaleString('en-US', { month: 'long' })
-    const year = parsed.getFullYear()
-    const time = parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-    return `${day} ${month} ${year}, ${time}`
-}
-
-function toStatusLabel(status: string | null) {
-    if (!status) return '-'
-    return status
-        .split('_')
-        .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
-        .join(' ')
 }
 
 export default function DeliveryOrdersPage() {
@@ -332,29 +284,29 @@ export default function DeliveryOrdersPage() {
             {
                 header: 'Delivery Order ID',
                 accessorKey: 'id',
-                cell: (row) => <span className="font-semibold tracking-wide text-text-light">{formatDeliveryOrderId(row.id)}</span>,
+                cell: (row) => <span className="font-semibold tracking-wide text-text-light">{formatShortId(row.id)}</span>,
             },
             {
                 header: 'Subscription',
                 accessorKey: 'subscription_id',
-                cell: (row) => <span className="font-semibold tracking-wide text-text-light">{formatSubscriptionId(row.subscription_id)}</span>,
+                cell: (row) => <span className="font-semibold tracking-wide text-text-light">{formatShortId(row.subscription_id)}</span>,
             },
             { header: 'Customer', accessorKey: 'customer' },
             { header: 'Items', accessorKey: 'items' },
             {
                 header: 'Delivery Status',
                 accessorKey: 'do_status',
-                cell: (row) => <Badge variant={getStatusVariant(row.do_status)}>{row.do_status}</Badge>,
+                cell: (row) => <Badge variant={getDeliveryStatusVariant(row.do_status)}>{row.do_status}</Badge>,
             },
             {
                 header: 'Billing Status',
                 accessorKey: 'billing_status',
-                cell: (row) => <Badge variant={getStatusVariant(row.billing_status)}>{row.billing_status ?? '-'}</Badge>,
+                cell: (row) => <Badge variant={getDeliveryStatusVariant(row.billing_status)}>{row.billing_status ?? '-'}</Badge>,
             },
             {
                 header: 'Service State',
                 accessorKey: 'service_state',
-                cell: (row) => <span className="text-sm text-text-light">{toStatusLabel(row.service_state)}</span>,
+                cell: (row) => <span className="text-sm text-text-light">{toTitleStatus(row.service_state)}</span>,
             },
             {
                 header: 'Created',
@@ -364,53 +316,41 @@ export default function DeliveryOrdersPage() {
 
     const actions = (row: AdminDeliveryOrder) => (
         <div className="flex items-center justify-end gap-2">
-            <button
-                type="button"
+            <IconActionButton
+                label={`View delivery order ${formatShortId(row.id)}`}
                 onClick={() => void openDetails(row.id, 'view')}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-subtext-light transition hover:border-primary/40 hover:text-primary"
-                aria-label={`View delivery order ${formatDeliveryOrderId(row.id)}`}
-            >
-                <Eye className="h-4 w-4" />
-            </button>
-            <button
-                type="button"
+                icon={Eye}
+            />
+            <IconActionButton
+                label={`Edit delivery order ${formatShortId(row.id)}`}
                 onClick={() => void openDetails(row.id, 'edit')}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-subtext-light transition hover:border-primary/40 hover:text-primary"
-                aria-label={`Edit delivery order ${formatDeliveryOrderId(row.id)}`}
-            >
-                <Pencil className="h-4 w-4" />
-            </button>
+                icon={Pencil}
+            />
         </div>
     )
 
     return (
         <div className="space-y-6">
-            <section className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="pointer-events-none absolute -right-14 -top-14 h-44 w-44 rounded-full bg-primary/10 blur-3xl" />
-                <div className="relative">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Fulfillment</p>
-                            <h1 className="mt-1 text-2xl font-bold text-text-light">Delivery Orders</h1>
-                            <p className="mt-1 text-sm text-subtext-light">Track dispatch, delivery outcomes, and guard transitions by billing and service state.</p>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => void loadData()}
-                            disabled={loading}
-                            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            Refresh
-                        </button>
-                    </div>
-                </div>
-            </section>
+            <AdminPageHeader
+                eyebrow="Fulfillment"
+                title="Delivery Orders"
+                description="Track dispatch, delivery outcomes, and guard transitions by billing and service state."
+                actions={(
+                    <button
+                        type="button"
+                        onClick={() => void loadData()}
+                        disabled={loading}
+                        className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        Refresh
+                    </button>
+                )}
+            />
 
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4">
-                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Filters</p>
-                    <p className="mt-1 text-sm text-subtext-light">Search by delivery order, subscription, customer, item, or statuses.</p>
-                </div>
+            <AdminFilterPanel
+                title="Filters"
+                description="Search by delivery order, subscription, customer, item, or statuses."
+            >
                 <div className="grid gap-3 md:grid-cols-[2fr_1fr_1fr]">
                     <input
                         type="search"
@@ -448,16 +388,12 @@ export default function DeliveryOrdersPage() {
                         Reset Filters
                     </button>
                 </div>
-            </section>
+            </AdminFilterPanel>
 
             {loading ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-subtext-light shadow-sm">
-                    Loading delivery orders...
-                </div>
+                <LoadingState message="Loading delivery orders..." />
             ) : error ? (
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                    {error}
-                </div>
+                <ErrorState message={error} />
             ) : (
                 <div className="space-y-4">
                     <DataTable columns={columns} data={orders} actions={actions} />
@@ -475,61 +411,41 @@ export default function DeliveryOrdersPage() {
                 </div>
             )}
 
-            {selectedDeliveryOrderId && (
-                <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/55 p-4 backdrop-blur-sm md:p-8">
-                    <div className="mx-auto w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-                        <div className="border-b border-slate-200 bg-linear-to-r from-slate-50 via-white to-slate-50 px-6 py-5">
-                            <div className="flex items-start justify-between gap-4">
-                                <div>
-                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-subtext-light">
-                                        {detailMode === 'edit' ? 'Edit Delivery Order' : 'Delivery Order Details'}
-                                    </p>
-                                    <h2 className="mt-1 text-3xl font-bold tracking-tight text-text-light">
-                                        #{formatDeliveryOrderId(selectedDeliveryOrderId)}
-                                    </h2>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={closeDetails}
-                                    className="rounded-full border border-slate-200 bg-white p-2 text-subtext-light transition-colors hover:border-slate-300 hover:text-text-light"
-                                    aria-label="Close delivery order details"
-                                >
-                                    <X className="h-5 w-5" />
-                                </button>
-                            </div>
-                        </div>
-
-                        <div className="max-h-[calc(100vh-13rem)] overflow-y-auto px-6 py-6">
+            <AdminModal
+                open={selectedDeliveryOrderId != null}
+                onClose={closeDetails}
+                eyebrow={detailMode === 'edit' ? 'Edit Delivery Order' : 'Delivery Order Details'}
+                title={selectedDeliveryOrderId ? `#${formatShortId(selectedDeliveryOrderId)}` : '#-'}
+                maxWidth="max-w-4xl"
+            >
                             {detailLoading ? (
-                                <div className="py-14 text-center text-sm text-subtext-light">Loading delivery order details...</div>
+                                <LoadingState message="Loading delivery order details..." />
                             ) : detailError ? (
-                                <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                                    {detailError}
-                                </div>
+                                <ErrorState message={detailError} />
                             ) : selectedDeliveryOrder ? (
                                 <div className="space-y-5">
                                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                                         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                                             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Delivery Status</p>
                                             <div className="mt-2">
-                                                <Badge variant={getStatusVariant(selectedDeliveryOrder.do_status)}>{selectedDeliveryOrder.do_status}</Badge>
+                                                <Badge variant={getDeliveryStatusVariant(selectedDeliveryOrder.do_status)}>{selectedDeliveryOrder.do_status}</Badge>
                                             </div>
                                         </div>
                                         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                                             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Billing Status</p>
                                             <div className="mt-2">
-                                                <Badge variant={getStatusVariant(selectedDeliveryOrder.subscription?.billing_status ?? null)}>
+                                                <Badge variant={getDeliveryStatusVariant(selectedDeliveryOrder.subscription?.billing_status ?? null)}>
                                                     {selectedDeliveryOrder.subscription?.billing_status ?? '-'}
                                                 </Badge>
                                             </div>
                                         </div>
                                         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                                             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Service State</p>
-                                            <p className="mt-2 text-sm font-semibold text-text-light">{toStatusLabel(selectedDeliveryOrder.subscription?.service_state ?? null)}</p>
+                                            <p className="mt-2 text-sm font-semibold text-text-light">{toTitleStatus(selectedDeliveryOrder.subscription?.service_state ?? null)}</p>
                                         </div>
                                         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
                                             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Collection</p>
-                                            <p className="mt-2 text-sm font-semibold text-text-light">{toStatusLabel(selectedDeliveryOrder.subscription?.collection_status ?? null)}</p>
+                                            <p className="mt-2 text-sm font-semibold text-text-light">{toTitleStatus(selectedDeliveryOrder.subscription?.collection_status ?? null)}</p>
                                         </div>
                                     </div>
 
@@ -537,7 +453,7 @@ export default function DeliveryOrdersPage() {
                                         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                                             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Subscription Context</p>
                                             <p className="mt-2 text-xl font-bold text-text-light">
-                                                #{selectedDeliveryOrder.subscription ? formatSubscriptionId(selectedDeliveryOrder.subscription.id) : '-'}
+                                                #{selectedDeliveryOrder.subscription ? formatShortId(selectedDeliveryOrder.subscription.id) : '-'}
                                             </p>
                                             <p className="mt-2 text-sm text-subtext-light">
                                                 {selectedDeliveryOrder.subscription?.customer_name ?? 'Unknown Customer'}
@@ -546,10 +462,10 @@ export default function DeliveryOrdersPage() {
                                                 {selectedDeliveryOrder.subscription?.items_summary ?? 'No items captured'}
                                             </p>
                                             <p className="mt-2 text-sm text-subtext-light">
-                                                Start: {formatDate(selectedDeliveryOrder.subscription?.start_date ?? null)}
+                                                Start: {formatDateTime(selectedDeliveryOrder.subscription?.start_date ?? null)}
                                             </p>
                                             <p className="mt-1 text-sm text-subtext-light">
-                                                End: {formatDate(selectedDeliveryOrder.subscription?.end_date ?? null)}
+                                                End: {formatDateTime(selectedDeliveryOrder.subscription?.end_date ?? null)}
                                             </p>
                                         </div>
 
@@ -559,8 +475,8 @@ export default function DeliveryOrdersPage() {
                                             <p className="mt-1 text-sm text-subtext-light">{selectedDeliveryOrder.subscription?.delivery.contact_name ?? '-'}</p>
                                             <p className="mt-1 text-sm text-subtext-light">{selectedDeliveryOrder.subscription?.delivery.contact_phone ?? '-'}</p>
                                             <p className="mt-2 text-sm text-text-light">{selectedDeliveryOrder.subscription?.delivery.address ?? '-'}</p>
-                                            <p className="mt-3 text-xs text-subtext-light">Created: {formatDate(selectedDeliveryOrder.created_at)}</p>
-                                            <p className="mt-1 text-xs text-subtext-light">Updated: {formatDate(selectedDeliveryOrder.updated_at)}</p>
+                                            <p className="mt-3 text-xs text-subtext-light">Created: {formatDateTime(selectedDeliveryOrder.created_at)}</p>
+                                            <p className="mt-1 text-xs text-subtext-light">Updated: {formatDateTime(selectedDeliveryOrder.updated_at)}</p>
                                         </div>
                                     </div>
 
@@ -633,14 +549,14 @@ export default function DeliveryOrdersPage() {
                                                     {selectedDeliveryOrder.fulfillment_events.length > 0 ? (
                                                         selectedDeliveryOrder.fulfillment_events.map((event) => (
                                                             <tr key={event.id}>
-                                                                <td className="whitespace-nowrap px-3 py-2 text-xs text-subtext-light">{formatDate(event.created_at)}</td>
+                                                                <td className="whitespace-nowrap px-3 py-2 text-xs text-subtext-light">{formatDateTime(event.created_at)}</td>
                                                                 <td className="whitespace-nowrap px-3 py-2 font-medium text-text-light">{toFulfillmentActionLabel(event.action)}</td>
                                                                 <td className="px-3 py-2 text-xs text-subtext-light">
                                                                     <p>
-                                                                        Service: {toStatusLabel(event.from_service_state)} {'->'} {toStatusLabel(event.to_service_state)}
+                                                                        Service: {toTitleStatus(event.from_service_state)} {'->'} {toTitleStatus(event.to_service_state)}
                                                                     </p>
                                                                     <p>
-                                                                        Collection: {toStatusLabel(event.from_collection_status)} {'->'} {toStatusLabel(event.to_collection_status)}
+                                                                        Collection: {toTitleStatus(event.from_collection_status)} {'->'} {toTitleStatus(event.to_collection_status)}
                                                                     </p>
                                                                 </td>
                                                                 <td className="px-3 py-2 text-xs text-text-light">{event.note ?? '-'}</td>
@@ -761,7 +677,7 @@ export default function DeliveryOrdersPage() {
                                                     Update pickup progress after a cancellation starts offboarding.
                                                 </p>
                                                 <p className="mt-1 text-xs text-subtext-light">
-                                                    Current: Collection {toStatusLabel(currentCollectionStatus)} | Service {toStatusLabel(currentServiceState)}
+                                                    Current: Collection {toTitleStatus(currentCollectionStatus)} | Service {toTitleStatus(currentServiceState)}
                                                 </p>
                                             </div>
 
@@ -864,14 +780,9 @@ export default function DeliveryOrdersPage() {
                                     ) : null}
                                 </div>
                             ) : (
-                                <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                                    Delivery order details are unavailable.
-                                </div>
+                                <ErrorState message="Delivery order details are unavailable." />
                             )}
-                        </div>
-                    </div>
-                </div>
-            )}
+            </AdminModal>
         </div>
     )
 }

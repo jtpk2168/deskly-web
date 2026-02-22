@@ -1,16 +1,29 @@
+import { Upload } from 'lucide-react'
+import { AdminPageHeader } from '@/components/admin/shared/AdminPageHeader'
+import { EmptyState } from '@/components/admin/shared/EmptyState'
+
 export default function ReelsManager() {
     return (
-        <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h1 style={{ fontSize: '2rem', fontWeight: 'bold' }}>Reels Management</h1>
-                <button style={{ padding: '10px 20px', backgroundColor: '#18181b', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
-                    Upload New Reel
-                </button>
-            </div>
+        <div className="space-y-6">
+            <AdminPageHeader
+                eyebrow="Content"
+                title="Reels Management"
+                description="Manage short-form media uploads for marketing and product highlights."
+                actions={(
+                    <button
+                        type="button"
+                        className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-dark"
+                    >
+                        <Upload className="h-4 w-4" />
+                        Upload New Reel
+                    </button>
+                )}
+            />
 
-            <div style={{ padding: '40px', textAlign: 'center', border: '1px dashed #e4e4e7', borderRadius: '8px', color: '#71717a' }}>
-                <p>No reels uploaded yet.</p>
-            </div>
+            <EmptyState
+                title="No reels uploaded yet"
+                description="Upload your first reel to start managing media content in the admin portal."
+            />
         </div>
-    );
+    )
 }

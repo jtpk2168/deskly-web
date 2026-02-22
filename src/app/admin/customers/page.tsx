@@ -1,10 +1,17 @@
 'use client'
 
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
-import { Eye, RefreshCw, Trash, X } from 'lucide-react'
+import { Eye, RefreshCw, Trash } from 'lucide-react'
+import { AdminModal } from '@/components/admin/shared/AdminModal'
+import { AdminPageHeader } from '@/components/admin/shared/AdminPageHeader'
+import { ErrorState } from '@/components/admin/shared/ErrorState'
+import { IconActionButton } from '@/components/admin/shared/IconActionButton'
+import { LoadingState } from '@/components/admin/shared/LoadingState'
 import { DataTable } from '@/components/ui/DataTable'
 import { Badge } from '@/components/ui/Badge'
 import { PaginationControls } from '@/components/ui/PaginationControls'
+import { formatAddressParts, formatCurrency, formatShortId } from '@/lib/admin-ui/formatters'
+import { getBillingStatusVariant, getRoleVariant } from '@/lib/admin-ui/statusVariants'
 import {
     AdminSubscription,
     AdminUser,
@@ -14,36 +21,6 @@ import {
     getCustomerProfile,
     getCustomers,
 } from '@/lib/api'
-
-function getRoleVariant(role: AdminUser['role']): 'default' | 'success' | 'warning' | 'error' | 'outline' {
-    return role === 'Admin' ? 'default' : 'outline'
-}
-
-function getBillingStatusVariant(status: string | null): 'default' | 'success' | 'warning' | 'error' | 'outline' {
-    const normalizedStatus = status?.toLowerCase()
-    if (normalizedStatus === 'active') return 'success'
-    if (normalizedStatus === 'pending_payment') return 'warning'
-    if (normalizedStatus === 'payment_failed') return 'error'
-    if (normalizedStatus === 'cancelled') return 'error'
-    return 'default'
-}
-
-function formatCurrency(value: number | null) {
-    return `RM ${value?.toFixed(2) ?? '0.00'}`
-}
-
-function formatId(value: string) {
-    const normalized = value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
-    return normalized.slice(0, 8)
-}
-
-function formatAddress(line1: string | null | undefined, city: string | null | undefined, postal: string | null | undefined) {
-    const parts = [
-        line1?.trim(),
-        [city?.trim(), postal?.trim()].filter(Boolean).join(' ').trim(),
-    ].filter((value) => value && value.length > 0) as string[]
-    return parts.length > 0 ? parts.join(', ') : '-'
-}
 
 export default function CustomersPage() {
     const [users, setUsers] = useState<AdminUser[]>([])
@@ -192,13 +169,13 @@ export default function CustomersPage() {
         {
             header: 'Subscription ID',
             accessorKey: 'id',
-            cell: (row) => <span className="font-semibold tracking-wide text-text-light">{formatId(row.id)}</span>,
+            cell: (row) => <span className="font-semibold tracking-wide text-text-light">{formatShortId(row.id)}</span>,
         },
         { header: 'Items', accessorKey: 'items' },
         {
             header: 'Monthly Rate',
             accessorKey: 'total',
-            cell: (row) => formatCurrency(row.total),
+            cell: (row) => formatCurrency(row.total, 'RM', 'RM 0.00'),
         },
         { header: 'Date', accessorKey: 'date' },
         {
@@ -210,54 +187,43 @@ export default function CustomersPage() {
 
     const actions = (row: AdminUser) => (
         <div className="flex justify-end gap-2">
-            <button
-                type="button"
+            <IconActionButton
+                label="View Customer Details"
                 onClick={() => openCustomerModal(row)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-subtext-light transition hover:border-primary/40 hover:text-primary"
-                title="View Customer Details"
-            >
-                <Eye className="h-4 w-4" />
-            </button>
-            <button
+                icon={Eye}
+            />
+            <IconActionButton
+                label="Delete User"
                 onClick={() => handleDelete(row.id)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-subtext-light transition hover:border-red-300 hover:bg-red-50 hover:text-red-600"
-                title="Delete User"
-            >
-                <Trash className="h-4 w-4" />
-            </button>
+                icon={Trash}
+                tone="danger"
+            />
         </div>
     )
 
     return (
         <div className="space-y-6">
-            <section className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="pointer-events-none absolute -right-14 -top-14 h-44 w-44 rounded-full bg-primary/10 blur-3xl" />
-                <div className="relative">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">User Management</p>
-                            <h1 className="mt-1 text-2xl font-bold text-text-light">Customers</h1>
-                            <p className="mt-1 text-sm text-subtext-light">View and manage customer accounts registered on Deskly.</p>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => void loadData()}
-                            disabled={loading}
-                            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                            Refresh
-                        </button>
-                    </div>
-                </div>
-            </section>
+            <AdminPageHeader
+                eyebrow="User Management"
+                title="Customers"
+                description="View and manage customer accounts registered on Deskly."
+                actions={(
+                    <button
+                        type="button"
+                        onClick={() => void loadData()}
+                        disabled={loading}
+                        className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                        Refresh
+                    </button>
+                )}
+            />
 
             {loading ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-subtext-light shadow-sm">Loading users...</div>
+                <LoadingState message="Loading users..." />
             ) : error ? (
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                    {error}
-                </div>
+                <ErrorState message={error} />
             ) : (
                 <div className="space-y-4">
                     <DataTable
@@ -280,27 +246,14 @@ export default function CustomersPage() {
             )}
 
             {selectedCustomer ? (
-                <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/55 p-4 backdrop-blur-sm md:p-8">
-                    <div className="mx-auto w-full max-w-6xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
-                        <div className="border-b border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-6 py-5">
-                            <div className="flex items-start justify-between gap-4">
-                                <div>
-                                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-subtext-light">Customer Details</p>
-                                    <h2 className="mt-1 text-3xl font-bold tracking-tight text-text-light">{selectedCustomer.name}</h2>
-                                    <p className="mt-1 text-sm text-subtext-light">{selectedCustomer.email}</p>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={closeCustomerModal}
-                                    className="rounded-full border border-slate-200 bg-white p-2 text-subtext-light transition-colors hover:border-slate-300 hover:text-text-light"
-                                    aria-label="Close customer details"
-                                >
-                                    <X className="h-5 w-5" />
-                                </button>
-                            </div>
-                        </div>
-
-                        <div className="max-h-[calc(100vh-12rem)] overflow-y-auto px-6 py-6">
+            <AdminModal
+                open={selectedCustomer != null}
+                onClose={closeCustomerModal}
+                eyebrow="Customer Details"
+                title={selectedCustomer.name}
+                maxWidth="max-w-6xl"
+            >
+                <p className="mb-4 text-sm text-subtext-light">{selectedCustomer.email}</p>
                             <section className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                                 <div className="mb-3 flex items-center justify-between">
                                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Profile & Company</p>
@@ -320,7 +273,7 @@ export default function CustomersPage() {
                                 ) : null}
 
                                 {customerProfileLoading ? (
-                                    <p className="text-sm text-subtext-light">Loading customer profile...</p>
+                                    <LoadingState message="Loading customer profile..." />
                                 ) : (
                                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                                         <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5">
@@ -357,21 +310,21 @@ export default function CustomersPage() {
                                         </div>
                                         <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 sm:col-span-2 xl:col-span-2">
                                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-subtext-light">Office Address</p>
-                                            <p className="mt-1 text-sm text-text-light">
-                                                {formatAddress(
-                                                    customerProfile?.company?.address,
-                                                    customerProfile?.company?.office_city,
-                                                    customerProfile?.company?.office_zip_postal,
+                                                <p className="mt-1 text-sm text-text-light">
+                                                    {formatAddressParts(
+                                                        customerProfile?.company?.address,
+                                                        customerProfile?.company?.office_city,
+                                                        customerProfile?.company?.office_zip_postal,
                                                 )}
                                             </p>
                                         </div>
                                         <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 sm:col-span-2 xl:col-span-2">
                                             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-subtext-light">Delivery Address</p>
-                                            <p className="mt-1 text-sm text-text-light">
-                                                {formatAddress(
-                                                    customerProfile?.company?.delivery_address ?? customerProfile?.company?.address,
-                                                    customerProfile?.company?.delivery_city ?? customerProfile?.company?.office_city,
-                                                    customerProfile?.company?.delivery_zip_postal ?? customerProfile?.company?.office_zip_postal,
+                                                <p className="mt-1 text-sm text-text-light">
+                                                    {formatAddressParts(
+                                                        customerProfile?.company?.delivery_address ?? customerProfile?.company?.address,
+                                                        customerProfile?.company?.delivery_city ?? customerProfile?.company?.office_city,
+                                                        customerProfile?.company?.delivery_zip_postal ?? customerProfile?.company?.office_zip_postal,
                                                 )}
                                             </p>
                                         </div>
@@ -401,7 +354,7 @@ export default function CustomersPage() {
                                 ) : null}
 
                                 {customerSubscriptionsLoading ? (
-                                    <div className="py-10 text-center text-sm text-subtext-light">Loading subscriptions...</div>
+                                    <LoadingState message="Loading subscriptions..." />
                                 ) : (
                                     <div className="space-y-4">
                                         <DataTable columns={customerSubscriptionColumns} data={customerSubscriptions} />
@@ -419,9 +372,7 @@ export default function CustomersPage() {
                                     </div>
                                 )}
                             </section>
-                        </div>
-                    </div>
-                </div>
+            </AdminModal>
             ) : null}
         </div>
     )

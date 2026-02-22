@@ -2,9 +2,20 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { DatabaseZap, ExternalLink, RefreshCw } from 'lucide-react'
+import { AdminPageHeader } from '@/components/admin/shared/AdminPageHeader'
+import { ErrorState } from '@/components/admin/shared/ErrorState'
+import { LoadingState } from '@/components/admin/shared/LoadingState'
 import { Badge } from '@/components/ui/Badge'
 import { DataTable } from '@/components/ui/DataTable'
 import { PaginationControls } from '@/components/ui/PaginationControls'
+import { INVOICE_PROVIDER_FILTER_OPTIONS, INVOICE_STATUS_FILTER_OPTIONS } from '@/lib/admin-ui/constants'
+import {
+    formatCurrency as formatMoney,
+    formatDateTime,
+    formatInvoicePeriod,
+    shorten,
+} from '@/lib/admin-ui/formatters'
+import { getInvoiceStatusVariant, getProviderVariant } from '@/lib/admin-ui/statusVariants'
 import {
     backfillBillingInvoices,
     BillingInvoice,
@@ -14,68 +25,6 @@ import {
     getBillingInvoices,
 } from '@/lib/api'
 import type { ReactNode } from 'react'
-
-const INVOICE_STATUS_FILTER_OPTIONS: Array<{ value: 'all' | BillingInvoiceStatus; label: string }> = [
-    { value: 'all', label: 'All Statuses' },
-    { value: 'paid', label: 'Paid' },
-    { value: 'open', label: 'Open' },
-    { value: 'draft', label: 'Draft' },
-    { value: 'payment_failed', label: 'Payment Failed' },
-    { value: 'void', label: 'Void' },
-    { value: 'uncollectible', label: 'Uncollectible' },
-    { value: 'unknown', label: 'Unknown' },
-]
-
-const INVOICE_PROVIDER_FILTER_OPTIONS: Array<{ value: 'all' | BillingInvoiceProvider; label: string }> = [
-    { value: 'all', label: 'All Providers' },
-    { value: 'stripe', label: 'Stripe' },
-    { value: 'mock', label: 'Mock' },
-]
-
-function formatDateTime(value: string | null) {
-    if (!value) return '-'
-    const parsed = new Date(value)
-    if (Number.isNaN(parsed.getTime())) return '-'
-    return parsed.toLocaleString()
-}
-
-function formatCurrency(value: number | null, currency: string) {
-    if (value == null) return '-'
-    return `${currency.toUpperCase()} ${value.toFixed(2)}`
-}
-
-function formatInvoicePeriod(periodStartAt: string | null, periodEndAt: string | null) {
-    if (!periodStartAt && !periodEndAt) return '-'
-
-    const start = formatDateTime(periodStartAt)
-    const end = formatDateTime(periodEndAt)
-
-    if (start === '-' && end === '-') return '-'
-    if (start === end) return start
-    if (start === '-') return end
-    if (end === '-') return start
-
-    return `${start} -> ${end}`
-}
-
-function getProviderVariant(provider: string): 'default' | 'success' | 'warning' | 'error' | 'outline' {
-    if (provider === 'stripe') return 'outline'
-    if (provider === 'mock') return 'default'
-    return 'default'
-}
-
-function getInvoiceStatusVariant(status: BillingInvoiceStatus): 'default' | 'success' | 'warning' | 'error' | 'outline' {
-    if (status === 'paid') return 'success'
-    if (status === 'open' || status === 'draft') return 'warning'
-    if (status === 'payment_failed' || status === 'void' || status === 'uncollectible') return 'error'
-    return 'default'
-}
-
-function shorten(value: string | null, size = 12) {
-    if (!value) return '-'
-    if (value.length <= size) return value
-    return `${value.slice(0, size)}...`
-}
 
 export default function InvoicesPage() {
     const [invoices, setInvoices] = useState<BillingInvoice[]>([])
@@ -200,17 +149,17 @@ export default function InvoicesPage() {
         {
             header: 'Total',
             accessorKey: 'total_amount',
-            cell: (row) => formatCurrency(row.total_amount, row.currency),
+            cell: (row) => formatMoney(row.total_amount, row.currency, '-'),
         },
         {
             header: 'Tax',
             accessorKey: 'tax_amount',
-            cell: (row) => formatCurrency(row.tax_amount, row.currency),
+            cell: (row) => formatMoney(row.tax_amount, row.currency, '-'),
         },
         {
             header: 'Due',
             accessorKey: 'amount_due',
-            cell: (row) => formatCurrency(row.amount_due, row.currency),
+            cell: (row) => formatMoney(row.amount_due, row.currency, '-'),
         },
         {
             header: 'Issued',
@@ -258,28 +207,22 @@ export default function InvoicesPage() {
 
     return (
         <div className="space-y-6">
-            <section className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="pointer-events-none absolute -right-14 -top-14 h-44 w-44 rounded-full bg-primary/10 blur-3xl" />
-                <div className="relative">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Billing</p>
-                            <h1 className="mt-1 text-2xl font-bold text-text-light">Invoices</h1>
-                            <p className="mt-1 text-sm text-subtext-light">Read-only mirrored invoice records from billing providers.</p>
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => void loadInvoices()}
-                            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50"
-                            disabled={invoicesLoading}
-                        >
-                            <RefreshCw className={`h-4 w-4 ${invoicesLoading ? 'animate-spin' : ''}`} />
-                            Refresh
-                        </button>
-                    </div>
-
-                </div>
-            </section>
+            <AdminPageHeader
+                eyebrow="Billing"
+                title="Invoices"
+                description="Read-only mirrored invoice records from billing providers."
+                actions={(
+                    <button
+                        type="button"
+                        onClick={() => void loadInvoices()}
+                        className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50"
+                        disabled={invoicesLoading}
+                    >
+                        <RefreshCw className={`h-4 w-4 ${invoicesLoading ? 'animate-spin' : ''}`} />
+                        Refresh
+                    </button>
+                )}
+            />
 
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -379,12 +322,8 @@ export default function InvoicesPage() {
                     </button>
                 </div>
 
-                {invoicesError ? (
-                    <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{invoicesError}</div>
-                ) : null}
-                {invoicesLoading ? (
-                    <p className="mb-3 text-sm text-subtext-light">Loading mirrored invoices...</p>
-                ) : null}
+                {invoicesError ? <ErrorState message={invoicesError} /> : null}
+                {invoicesLoading ? <LoadingState message="Loading mirrored invoices..." /> : null}
 
                 <div className="space-y-4">
                     <DataTable columns={invoiceColumns} data={invoices} />

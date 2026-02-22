@@ -1,10 +1,17 @@
 'use client'
 
 import Link from 'next/link'
-import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from 'react'
-import { Download, Edit, Plus, Power, Upload, X } from 'lucide-react'
+import { type ChangeEvent, type DragEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { Download, Edit, Plus, Power, Upload } from 'lucide-react'
+import { AdminFilterPanel } from '@/components/admin/shared/AdminFilterPanel'
+import { AdminModal } from '@/components/admin/shared/AdminModal'
+import { AdminPageHeader } from '@/components/admin/shared/AdminPageHeader'
+import { ErrorState } from '@/components/admin/shared/ErrorState'
+import { LoadingState } from '@/components/admin/shared/LoadingState'
 import { Badge } from '@/components/ui/Badge'
+import { DataTable } from '@/components/ui/DataTable'
 import { PaginationControls } from '@/components/ui/PaginationControls'
+import { getProductStatusVariant } from '@/lib/admin-ui/statusVariants'
 import {
     AdminProduct,
     AdminProductFilters,
@@ -142,12 +149,6 @@ export default function ProductsPage() {
     const getSortIndicator = (column: NonNullable<AdminProductFilters['sortBy']>) => {
         if (sortBy !== column) return '↕'
         return sortDir === 'asc' ? '↑' : '↓'
-    }
-
-    const getStatusVariant = (productStatus: ProductStatus) => {
-        if (productStatus === 'active') return 'success'
-        if (productStatus === 'inactive') return 'error'
-        return 'outline'
     }
 
     const handleToggleStatus = async (product: AdminProduct) => {
@@ -303,55 +304,143 @@ export default function ProductsPage() {
         setPage(1)
     }
 
+    const columns: Array<{
+        header: ReactNode
+        accessorKey?: keyof AdminProduct
+        cell?: (row: AdminProduct) => ReactNode
+    }> = [
+            {
+                header: 'Product ID',
+                accessorKey: 'product_code',
+                cell: (row) => <span className="font-semibold text-text-light">{row.product_code}</span>,
+            },
+            {
+                header: 'Image',
+                accessorKey: 'image_url',
+                cell: (row) => (
+                    row.image_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                            src={row.image_url}
+                            alt={row.name}
+                            className="h-12 w-12 rounded-lg border border-slate-200 object-cover"
+                        />
+                    ) : (
+                        <div className="h-12 w-12 rounded-lg border border-slate-200 bg-slate-100" />
+                    )
+                ),
+            },
+            {
+                header: (
+                    <button type="button" onClick={() => handleSort('name')} className="inline-flex items-center gap-1">
+                        NAME {getSortIndicator('name')}
+                    </button>
+                ),
+                accessorKey: 'name',
+            },
+            { header: 'Category', accessorKey: 'category' },
+            {
+                header: (
+                    <button type="button" onClick={() => handleSort('monthly_price')} className="inline-flex items-center gap-1">
+                        PRICE {getSortIndicator('monthly_price')}
+                    </button>
+                ),
+                accessorKey: 'monthly_price',
+                cell: (row) => (
+                    <div>
+                        <p>RM {Number(row.monthly_price).toFixed(2)}</p>
+                        {row.pricing_mode === 'tiered' && Array.isArray(row.pricing_tiers) && row.pricing_tiers.length > 0 ? (
+                            <p className="text-xs text-subtext-light">
+                                {row.pricing_tiers.length} tier(s): {[...row.pricing_tiers]
+                                    .sort((a, b) => a.min_months - b.min_months)
+                                    .map((tier) => `${tier.min_months}+m RM ${Number(tier.monthly_price).toFixed(2)}`)
+                                    .join(', ')}
+                            </p>
+                        ) : null}
+                    </div>
+                ),
+            },
+            {
+                header: (
+                    <button type="button" onClick={() => handleSort('stock_quantity')} className="inline-flex items-center gap-1">
+                        STOCK {getSortIndicator('stock_quantity')}
+                    </button>
+                ),
+                accessorKey: 'stock_quantity',
+            },
+            {
+                header: 'Status',
+                accessorKey: 'status',
+                cell: (row) => <Badge variant={getProductStatusVariant(row.status)}>{row.status}</Badge>,
+            },
+        ]
+
+    const actions = (product: AdminProduct) => (
+        <div className="inline-flex items-center gap-2">
+            <Link
+                href={`/admin/products/${product.id}`}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-text-light transition hover:bg-slate-50"
+            >
+                <span className="inline-flex items-center gap-1">
+                    <Edit className="h-3.5 w-3.5" />
+                    Edit
+                </span>
+            </Link>
+            <button
+                type="button"
+                onClick={() => handleToggleStatus(product)}
+                disabled={submitting}
+                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
+            >
+                <span className="inline-flex items-center gap-1">
+                    <Power className="h-3.5 w-3.5" />
+                    {product.status === 'active' ? 'Deactivate' : 'Activate'}
+                </span>
+            </button>
+        </div>
+    )
+
     return (
         <div className="space-y-6">
-            <section className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <div className="pointer-events-none absolute -right-14 -top-14 h-44 w-44 rounded-full bg-primary/10 blur-3xl" />
-                <div className="relative">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-subtext-light">Catalog</p>
-                            <h1 className="mt-1 text-2xl font-bold text-text-light">Products</h1>
-                            <p className="mt-1 text-sm text-subtext-light">Manage product inventory, pricing, and CSV operations.</p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                            <button
-                                type="button"
-                                onClick={() => openCsvModal('import')}
-                                disabled={submitting}
-                                className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
-                            >
-                                <Upload className="h-4 w-4" />
-                                Import CSV
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => openCsvModal('export')}
-                                disabled={submitting}
-                                className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
-                            >
-                                <Download className="h-4 w-4" />
-                                Export CSV
-                            </button>
-                            <Link
-                                href="/admin/products/new"
-                                className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-dark"
-                            >
-                                <Plus className="h-4 w-4" />
-                                Add Product
-                            </Link>
-                        </div>
-                    </div>
+            <AdminPageHeader
+                eyebrow="Catalog"
+                title="Products"
+                description="Manage product inventory, pricing, and CSV operations."
+                actions={(
+                    <>
+                        <button
+                            type="button"
+                            onClick={() => openCsvModal('import')}
+                            disabled={submitting}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
+                        >
+                            <Upload className="h-4 w-4" />
+                            Import CSV
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => openCsvModal('export')}
+                            disabled={submitting}
+                            className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
+                        >
+                            <Download className="h-4 w-4" />
+                            Export CSV
+                        </button>
+                        <Link
+                            href="/admin/products/new"
+                            className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-dark"
+                        >
+                            <Plus className="h-4 w-4" />
+                            Add Product
+                        </Link>
+                    </>
+                )}
+            />
 
-                </div>
-            </section>
-
-            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-subtext-light">Filters</p>
-                        <p className="mt-1 text-sm text-subtext-light">Search products by name, category, status, price, and stock.</p>
-                    </div>
+            <AdminFilterPanel
+                title="Filters"
+                description="Search products by name, category, status, price, and stock."
+                actions={(
                     <button
                         type="button"
                         onClick={resetFilters}
@@ -360,7 +449,8 @@ export default function ProductsPage() {
                     >
                         Reset Filters
                     </button>
-                </div>
+                )}
+            >
                 <div className="grid gap-3 md:grid-cols-3">
                     <input
                         type="text"
@@ -427,115 +517,21 @@ export default function ProductsPage() {
                         />
                     </div>
                 </div>
-            </section>
+            </AdminFilterPanel>
 
             {loading ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-subtext-light shadow-sm">
-                    Loading products...
-                </div>
+                <LoadingState message="Loading products..." />
             ) : error ? (
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                    {error}
-                </div>
+                <ErrorState message={error} />
             ) : (
-                <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-                    <table className="min-w-full divide-y divide-slate-200">
-                        <thead className="bg-slate-50">
-                            <tr>
-                                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">Product ID</th>
-                                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">Image</th>
-                                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">
-                                    <button type="button" onClick={() => handleSort('name')} className="inline-flex items-center gap-1">
-                                        NAME {getSortIndicator('name')}
-                                    </button>
-                                </th>
-                                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">Category</th>
-                                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">
-                                    <button type="button" onClick={() => handleSort('monthly_price')} className="inline-flex items-center gap-1">
-                                        PRICE {getSortIndicator('monthly_price')}
-                                    </button>
-                                </th>
-                                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">
-                                    <button type="button" onClick={() => handleSort('stock_quantity')} className="inline-flex items-center gap-1">
-                                        STOCK {getSortIndicator('stock_quantity')}
-                                    </button>
-                                </th>
-                                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-subtext-light">Status</th>
-                                <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-subtext-light">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200 bg-white">
-                            {products.length === 0 ? (
-                                <tr>
-                                    <td colSpan={8} className="px-4 py-8 text-center text-sm text-subtext-light">
-                                        No products found
-                                    </td>
-                                </tr>
-                            ) : (
-                                products.map((product) => (
-                                    <tr key={product.id} className="transition hover:bg-slate-50/70">
-                                        <td className="px-4 py-3 text-sm font-semibold text-text-light">{product.product_code}</td>
-                                        <td className="px-4 py-3">
-                                            {product.image_url ? (
-                                                // eslint-disable-next-line @next/next/no-img-element
-                                                <img
-                                                    src={product.image_url}
-                                                    alt={product.name}
-                                                    className="h-12 w-12 rounded-lg border border-slate-200 object-cover"
-                                                />
-                                            ) : (
-                                                <div className="h-12 w-12 rounded-lg border border-slate-200 bg-slate-100" />
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3 text-sm text-text-light">{product.name}</td>
-                                        <td className="px-4 py-3 text-sm text-text-light">{product.category ?? '-'}</td>
-                                        <td className="px-4 py-3 text-sm text-text-light">
-                                            <p>RM {Number(product.monthly_price).toFixed(2)}</p>
-                                            {product.pricing_mode === 'tiered' && Array.isArray(product.pricing_tiers) && product.pricing_tiers.length > 0 && (
-                                                <p className="text-xs text-subtext-light">
-                                                    {product.pricing_tiers.length} tier(s): {[...product.pricing_tiers]
-                                                        .sort((a, b) => a.min_months - b.min_months)
-                                                        .map((tier) => `${tier.min_months}+m RM ${Number(tier.monthly_price).toFixed(2)}`)
-                                                        .join(', ')}
-                                                </p>
-                                            )}
-                                        </td>
-                                        <td className="px-4 py-3 text-sm text-text-light">{product.stock_quantity}</td>
-                                        <td className="px-4 py-3 text-sm">
-                                            <Badge variant={getStatusVariant(product.status)}>
-                                                {product.status}
-                                            </Badge>
-                                        </td>
-                                        <td className="px-4 py-3 text-right">
-                                            <div className="inline-flex items-center gap-2">
-                                                <Link
-                                                    href={`/admin/products/${product.id}`}
-                                                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-text-light transition hover:bg-slate-50"
-                                                >
-                                                    <span className="inline-flex items-center gap-1">
-                                                        <Edit className="h-3.5 w-3.5" />
-                                                        Edit
-                                                    </span>
-                                                </Link>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleToggleStatus(product)}
-                                                    disabled={submitting}
-                                                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
-                                                >
-                                                    <span className="inline-flex items-center gap-1">
-                                                        <Power className="h-3.5 w-3.5" />
-                                                        {product.status === 'active' ? 'Deactivate' : 'Activate'}
-                                                    </span>
-                                                </button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
-                        </tbody>
-                    </table>
-                </div>
+                <DataTable
+                    columns={columns}
+                    data={products}
+                    actions={actions}
+                    emptyMessage="No products found"
+                    cellClassName="px-4 py-3 text-sm text-text-light"
+                    tableClassName="min-w-full"
+                />
             )}
 
             {!loading && !error && (
@@ -552,177 +548,163 @@ export default function ProductsPage() {
                 />
             )}
 
-            {csvModalMode && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-sm">
-                    <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-                        <div className="mb-5 flex items-start justify-between gap-4">
-                            <div>
-                                <h2 className="text-xl font-bold text-text-light">
-                                    {csvModalMode === 'import' ? 'Import Products CSV' : 'Export Products CSV'}
-                                </h2>
-                                <div className="mt-1 text-sm text-subtext-light">
-                                    {csvModalMode === 'import' ? (
-                                        <div className="space-y-1">
-                                            <p>Upload a CSV file to create products in bulk.</p>
-                                            <p>
-                                                Required columns: <span className="font-medium text-text-light">name, category, monthly_price, stock_quantity</span>.
-                                            </p>
-                                            <p>
-                                                Optional columns: <span className="font-medium text-text-light">description, pricing_mode, pricing_tiers, image_url, video_url</span>.
-                                            </p>
-                                            <p>
-                                                Use <span className="font-medium text-text-light">pricing_mode</span> as <span className="font-medium text-text-light">fixed</span> or <span className="font-medium text-text-light">tiered</span>.
-                                            </p>
-                                            <p>
-                                                For tiered pricing, use <span className="font-medium text-text-light">pricing_tiers</span> format like <span className="font-medium text-text-light">6:80|12:75</span> (meaning <span className="font-medium text-text-light">6:80</span> = 6+ months at RM80/month, <span className="font-medium text-text-light">12:75</span> = 12+ months at RM75/month).
-                                            </p>
-                                            <p>All imported products are saved as <span className="font-medium text-text-light">draft</span>.</p>
-                                        </div>
-                                    ) : (
-                                        <>
-                                            Export columns: <span className="font-medium text-text-light">product_code, name, description, category, monthly_price, pricing_mode, pricing_tiers, stock_quantity, status, created_at, updated_at</span>.
-                                        </>
-                                    )}
-                                </div>
-                            </div>
+            <AdminModal
+                open={csvModalMode != null}
+                onClose={closeCsvModal}
+                title={csvModalMode === 'import' ? 'Import Products CSV' : 'Export Products CSV'}
+                maxWidth="max-w-2xl"
+            >
+                <div className="mt-1 text-sm text-subtext-light">
+                    {csvModalMode === 'import' ? (
+                        <div className="space-y-1">
+                            <p>Upload a CSV file to create products in bulk.</p>
+                            <p>
+                                Required columns: <span className="font-medium text-text-light">name, category, monthly_price, stock_quantity</span>.
+                            </p>
+                            <p>
+                                Optional columns: <span className="font-medium text-text-light">description, pricing_mode, pricing_tiers, image_url, video_url</span>.
+                            </p>
+                            <p>
+                                Use <span className="font-medium text-text-light">pricing_mode</span> as <span className="font-medium text-text-light">fixed</span> or <span className="font-medium text-text-light">tiered</span>.
+                            </p>
+                            <p>
+                                For tiered pricing, use <span className="font-medium text-text-light">pricing_tiers</span> format like <span className="font-medium text-text-light">6:80|12:75</span> (meaning <span className="font-medium text-text-light">6:80</span> = 6+ months at RM80/month, <span className="font-medium text-text-light">12:75</span> = 12+ months at RM75/month).
+                            </p>
+                            <p>All imported products are saved as <span className="font-medium text-text-light">draft</span>.</p>
+                        </div>
+                    ) : (
+                        <>
+                            Export columns: <span className="font-medium text-text-light">product_code, name, description, category, monthly_price, pricing_mode, pricing_tiers, stock_quantity, status, created_at, updated_at</span>.
+                        </>
+                    )}
+                </div>
+
+                {csvModalMode === 'import' ? (
+                    <div className="mt-4 space-y-4">
+                        <div className="flex justify-start">
                             <button
                                 type="button"
-                                onClick={closeCsvModal}
-                                className="rounded-xl border border-slate-200 p-2 text-subtext-light transition hover:bg-slate-50 hover:text-text-light"
-                                aria-label="Close CSV modal"
+                                onClick={handleDownloadImportTemplate}
+                                disabled={submitting}
+                                className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
                             >
-                                <X className="h-5 w-5" />
+                                <Download className="h-4 w-4" />
+                                Download CSV Template
                             </button>
                         </div>
 
-                        {csvModalMode === 'import' ? (
-                            <div className="space-y-4">
-                                <div className="flex justify-start">
-                                    <button
-                                        type="button"
-                                        onClick={handleDownloadImportTemplate}
-                                        disabled={submitting}
-                                        className="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
-                                    >
-                                        <Download className="h-4 w-4" />
-                                        Download CSV Template
-                                    </button>
-                                </div>
+                        <input
+                            ref={csvUploadInputRef}
+                            type="file"
+                            accept=".csv,text/csv"
+                            className="hidden"
+                            onChange={handleCsvInputChange}
+                        />
+                        <div
+                            onDragOver={(event) => {
+                                event.preventDefault()
+                                setIsCsvDragOver(true)
+                            }}
+                            onDragLeave={(event) => {
+                                event.preventDefault()
+                                setIsCsvDragOver(false)
+                            }}
+                            onDrop={handleCsvDrop}
+                            className={`rounded-xl border-2 border-dashed p-8 text-center transition-colors ${isCsvDragOver ? 'border-primary bg-primary/5' : 'border-slate-300 bg-slate-50'}`}
+                        >
+                            <p className="text-sm font-medium text-text-light">
+                                Drag and drop your CSV file here
+                            </p>
+                            <p className="mt-1 text-xs text-subtext-light">
+                                Or click below to browse from your computer.
+                            </p>
+                            <button
+                                type="button"
+                                onClick={() => csvUploadInputRef.current?.click()}
+                                disabled={submitting}
+                                className="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
+                            >
+                                <Upload className="h-4 w-4" />
+                                Choose CSV File
+                            </button>
+                        </div>
 
-                                <input
-                                    ref={csvUploadInputRef}
-                                    type="file"
-                                    accept=".csv,text/csv"
-                                    className="hidden"
-                                    onChange={handleCsvInputChange}
-                                />
-                                <div
-                                    onDragOver={(event) => {
-                                        event.preventDefault()
-                                        setIsCsvDragOver(true)
-                                    }}
-                                    onDragLeave={(event) => {
-                                        event.preventDefault()
-                                        setIsCsvDragOver(false)
-                                    }}
-                                    onDrop={handleCsvDrop}
-                                    className={`rounded-xl border-2 border-dashed p-8 text-center transition-colors ${isCsvDragOver ? 'border-primary bg-primary/5' : 'border-slate-300 bg-slate-50'}`}
-                                >
-                                    <p className="text-sm font-medium text-text-light">
-                                        Drag and drop your CSV file here
-                                    </p>
-                                    <p className="mt-1 text-xs text-subtext-light">
-                                        Or click below to browse from your computer.
-                                    </p>
-                                    <button
-                                        type="button"
-                                        onClick={() => csvUploadInputRef.current?.click()}
-                                        disabled={submitting}
-                                        className="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
-                                    >
-                                        <Upload className="h-4 w-4" />
-                                        Choose CSV File
-                                    </button>
-                                </div>
-
-                                {selectedCsvFile && (
-                                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
-                                        <p className="font-medium text-text-light">Selected file</p>
-                                        <p className="mt-1 text-subtext-light">{selectedCsvFile.name}</p>
-                                    </div>
-                                )}
-
-                                {csvModalError && (
-                                    <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                                        {csvModalError}
-                                    </div>
-                                )}
-
-                                {csvImportRowErrors.length > 0 && (
-                                    <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                                        <p className="font-medium">CSV validation details</p>
-                                        <div className="mt-2 max-h-44 overflow-y-auto space-y-1">
-                                            {csvImportRowErrors.slice(0, 30).map((line) => (
-                                                <p key={line}>{line}</p>
-                                            ))}
-                                        </div>
-                                        {csvImportRowErrors.length > 30 && (
-                                            <p className="mt-2 text-xs">
-                                                Showing first 30 errors. Fix these first, then re-import.
-                                            </p>
-                                        )}
-                                    </div>
-                                )}
-
-                                <div className="flex justify-end gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={closeCsvModal}
-                                        disabled={submitting}
-                                        className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={handleImportCsv}
-                                        disabled={submitting}
-                                        className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-dark disabled:opacity-50"
-                                    >
-                                        <Upload className="h-4 w-4" />
-                                        {submitting ? 'Importing...' : 'Import CSV'}
-                                    </button>
-                                </div>
+                        {selectedCsvFile ? (
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm">
+                                <p className="font-medium text-text-light">Selected file</p>
+                                <p className="mt-1 text-subtext-light">{selectedCsvFile.name}</p>
                             </div>
-                        ) : (
-                            <div className="space-y-4">
-                                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-subtext-light">
-                                    Export will include your current search, sort, and filter selection. Media fields are excluded from export.
-                                </div>
-                                <div className="flex justify-end gap-2">
-                                    <button
-                                        type="button"
-                                        onClick={closeCsvModal}
-                                        disabled={submitting}
-                                        className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={handleExportCsv}
-                                        disabled={submitting}
-                                        className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-dark disabled:opacity-50"
-                                    >
-                                        <Download className="h-4 w-4" />
-                                        {submitting ? 'Exporting...' : 'Export CSV'}
-                                    </button>
-                                </div>
+                        ) : null}
+
+                        {csvModalError ? (
+                            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                {csvModalError}
                             </div>
-                        )}
+                        ) : null}
+
+                        {csvImportRowErrors.length > 0 ? (
+                            <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                                <p className="font-medium">CSV validation details</p>
+                                <div className="mt-2 max-h-44 overflow-y-auto space-y-1">
+                                    {csvImportRowErrors.slice(0, 30).map((line) => (
+                                        <p key={line}>{line}</p>
+                                    ))}
+                                </div>
+                                {csvImportRowErrors.length > 30 ? (
+                                    <p className="mt-2 text-xs">
+                                        Showing first 30 errors. Fix these first, then re-import.
+                                    </p>
+                                ) : null}
+                            </div>
+                        ) : null}
+
+                        <div className="flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={closeCsvModal}
+                                disabled={submitting}
+                                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleImportCsv}
+                                disabled={submitting}
+                                className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-dark disabled:opacity-50"
+                            >
+                                <Upload className="h-4 w-4" />
+                                {submitting ? 'Importing...' : 'Import CSV'}
+                            </button>
+                        </div>
                     </div>
-                </div>
-            )}
+                ) : (
+                    <div className="mt-4 space-y-4">
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-subtext-light">
+                            Export will include your current search, sort, and filter selection. Media fields are excluded from export.
+                        </div>
+                        <div className="flex justify-end gap-2">
+                            <button
+                                type="button"
+                                onClick={closeCsvModal}
+                                disabled={submitting}
+                                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:bg-slate-50 disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleExportCsv}
+                                disabled={submitting}
+                                className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-dark disabled:opacity-50"
+                            >
+                                <Download className="h-4 w-4" />
+                                {submitting ? 'Exporting...' : 'Export CSV'}
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </AdminModal>
         </div>
     )
 }
