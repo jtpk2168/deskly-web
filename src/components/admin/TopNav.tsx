@@ -1,19 +1,13 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
-import { Bell, ChevronRight } from 'lucide-react'
-import { usePathname } from 'next/navigation'
+import { Bell } from 'lucide-react'
 import { supabase } from '../../../lib/supabaseClient'
 
 type AccountSummary = {
     name: string
     email: string
-}
-
-type PageMeta = {
-    title: string
-    subtitle: string
 }
 
 function toDisplayName(user: SupabaseUser | null) {
@@ -46,57 +40,8 @@ function toInitials(name: string) {
     return `${chunks[0].slice(0, 1)}${chunks[1].slice(0, 1)}`.toUpperCase()
 }
 
-function toTitleCase(value: string) {
-    return value
-        .split('-')
-        .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-        .join(' ')
-}
-
-function getPageMeta(pathname: string): PageMeta {
-    if (pathname === '/admin') {
-        return { title: 'Dashboard', subtitle: 'Live performance view across orders, products, and users.' }
-    }
-    if (pathname === '/admin/products') {
-        return { title: 'Products', subtitle: 'Manage inventory, pricing, and product media.' }
-    }
-    if (pathname === '/admin/products/new') {
-        return { title: 'Add Product', subtitle: 'Create a new product and publish it to catalog.' }
-    }
-    if (pathname.startsWith('/admin/products/')) {
-        return { title: 'Edit Product', subtitle: 'Update product details, pricing tiers, and status.' }
-    }
-    if (pathname.startsWith('/admin/delivery-orders')) {
-        return { title: 'Delivery Orders', subtitle: 'Track dispatch, delivery outcomes, and fulfillment transitions.' }
-    }
-    if (pathname.startsWith('/admin/subscriptions')) {
-        return { title: 'Subscriptions', subtitle: 'Manage billing-focused subscription lifecycle and monetary states.' }
-    }
-    if (pathname.startsWith('/admin/orders')) {
-        return { title: 'Orders', subtitle: 'Redirecting to Delivery Orders...' }
-    }
-    if (pathname.startsWith('/admin/invoices')) {
-        return { title: 'Invoices', subtitle: 'Review billing records and payment outcomes.' }
-    }
-    if (pathname.startsWith('/admin/customers')) {
-        return { title: 'Customers', subtitle: 'View and manage customer accounts.' }
-    }
-    if (pathname.startsWith('/admin/admins')) {
-        return { title: 'Admins', subtitle: 'Manage administrative access and roles.' }
-    }
-    if (pathname.startsWith('/admin/settings')) {
-        return { title: 'Settings', subtitle: 'Configure platform behavior and integrations.' }
-    }
-
-    const segments = pathname.split('/').filter(Boolean)
-    const fallbackLabel = segments.length > 1 ? toTitleCase(segments[segments.length - 1]) : 'Overview'
-    return { title: fallbackLabel, subtitle: 'Admin workspace' }
-}
-
 export function TopNav() {
-    const pathname = usePathname()
     const [account, setAccount] = useState<AccountSummary>({ name: 'Admin', email: 'No email' })
-    const pageMeta = useMemo(() => getPageMeta(pathname), [pathname])
 
     useEffect(() => {
         let isMounted = true
@@ -125,16 +70,7 @@ export function TopNav() {
 
     return (
         <header className="border-b border-slate-200 bg-white/85 backdrop-blur">
-            <div className="flex h-20 items-center justify-between px-6 lg:px-8">
-                <div>
-                    <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.12em] text-subtext-light">
-                        <span>Admin</span>
-                        <ChevronRight className="h-3.5 w-3.5" />
-                        <span>{pageMeta.title}</span>
-                    </div>
-                    <h2 className="mt-1 text-xl font-semibold text-text-light">{pageMeta.title}</h2>
-                    <p className="text-xs text-subtext-light">{pageMeta.subtitle}</p>
-                </div>
+            <div className="flex h-16 items-center justify-end px-6 lg:px-8">
                 <div className="flex items-center gap-3">
                     <button className="relative rounded-xl border border-slate-200 bg-white p-2.5 text-subtext-light transition hover:border-primary/30 hover:text-primary">
                         <Bell className="h-4 w-4" />
