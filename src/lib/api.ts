@@ -551,20 +551,6 @@ function buildBillingInvoiceQueryParams(filters: BillingInvoiceFilters = {}) {
     return params
 }
 
-export async function fetchAdminData(endpoint: string) {
-    try {
-        const res = await fetch(`/api/${endpoint}`, { cache: 'no-store' })
-        if (!res.ok) {
-            throw new Error(`Failed to fetch ${endpoint}: ${res.statusText}`)
-        }
-        const json = await res.json()
-        return json.data || json
-    } catch (error) {
-        console.error(`Error fetching ${endpoint}:`, error)
-        return []
-    }
-}
-
 // Dashboard
 export async function getAdminDashboard(): Promise<AdminDashboard> {
     const res = await fetch('/api/admin/dashboard', { cache: 'no-store' })
@@ -849,13 +835,9 @@ export async function getCustomers(query: PaginationQuery = {}): Promise<Paginat
     return parsePaginatedResponse<AdminUser>(res)
 }
 
-export async function deleteCustomer(userId: string) {
+export async function deleteCustomer(userId: string): Promise<{ message: string }> {
     const res = await fetch(`/api/customers?id=${userId}`, { method: 'DELETE' })
-    if (!res.ok) {
-        const errorText = await res.text()
-        throw new Error(errorText || 'Failed to delete customer')
-    }
-    return res.json()
+    return parseResponse<{ message: string }>(res)
 }
 
 export async function getCustomerProfile(userId: string): Promise<CustomerProfile> {

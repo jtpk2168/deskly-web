@@ -29,6 +29,13 @@ export function formatShortId(value: string, size = 8) {
     return normalized.slice(0, size)
 }
 
+export function formatInitials(name: string, fallback = 'U') {
+    const chunks = name.trim().split(/\s+/).filter(Boolean)
+    if (chunks.length === 0) return fallback
+    if (chunks.length === 1) return chunks[0].slice(0, 1).toUpperCase()
+    return `${chunks[0].slice(0, 1)}${chunks[1].slice(0, 1)}`.toUpperCase()
+}
+
 export function formatDate(value: string | null) {
     const parsed = toDate(value)
     if (!parsed) return '-'

@@ -8,6 +8,7 @@ import { ErrorState } from '@/components/admin/shared/ErrorState'
 import {
     formatCurrency as formatMoney,
     formatDateTime,
+    formatInitials,
     formatRelativeTime,
     toTitleStatus,
 } from '@/lib/admin-ui/formatters'
@@ -22,13 +23,6 @@ function getStatusClasses(status: string | null) {
     if (normalized === 'pending_payment') return 'border-amber-200 bg-amber-50 text-amber-700'
     if (normalized === 'payment_failed') return 'border-red-200 bg-red-50 text-red-700'
     return 'border-slate-200 bg-slate-100 text-slate-700'
-}
-
-function toInitials(name: string) {
-    const chunks = name.trim().split(/\s+/).filter(Boolean)
-    if (chunks.length === 0) return 'U'
-    if (chunks.length === 1) return chunks[0].slice(0, 1).toUpperCase()
-    return `${chunks[0].slice(0, 1)}${chunks[1].slice(0, 1)}`.toUpperCase()
 }
 
 export default function AdminDashboardPage() {
@@ -52,7 +46,7 @@ export default function AdminDashboardPage() {
     }, [])
 
     useEffect(() => {
-        loadDashboard()
+        void loadDashboard()
     }, [loadDashboard])
 
     return (
@@ -64,7 +58,7 @@ export default function AdminDashboardPage() {
                 actions={(
                     <button
                         type="button"
-                        onClick={loadDashboard}
+                        onClick={() => void loadDashboard()}
                         disabled={loading}
                         className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-text-light transition hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
                     >
@@ -139,7 +133,7 @@ export default function AdminDashboardPage() {
                                     <div className="flex items-start justify-between gap-4">
                                         <div className="flex items-start gap-3">
                                             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/15 text-xs font-bold tracking-wide text-primary-dark">
-                                                {toInitials(activity.customerName)}
+                                                {formatInitials(activity.customerName, 'U')}
                                             </div>
                                             <div>
                                                 <p className="text-sm font-semibold text-text-light">{activity.customerName}</p>

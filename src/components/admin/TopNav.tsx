@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import type { User as SupabaseUser } from '@supabase/supabase-js'
 import { Bell } from 'lucide-react'
+import { formatInitials } from '@/lib/admin-ui/formatters'
 import { supabase } from '../../../lib/supabaseClient'
 
 type AccountSummary = {
@@ -33,13 +34,6 @@ function toAccountSummary(user: SupabaseUser | null): AccountSummary {
     }
 }
 
-function toInitials(name: string) {
-    const chunks = name.trim().split(/\s+/).filter(Boolean)
-    if (chunks.length === 0) return 'A'
-    if (chunks.length === 1) return chunks[0].slice(0, 1).toUpperCase()
-    return `${chunks[0].slice(0, 1)}${chunks[1].slice(0, 1)}`.toUpperCase()
-}
-
 export function TopNav() {
     const [account, setAccount] = useState<AccountSummary>({ name: 'Admin', email: 'No email' })
 
@@ -56,7 +50,7 @@ export function TopNav() {
             syncAccountFromUser(data.user ?? null)
         }
 
-        loadUser()
+        void loadUser()
 
         const { data: authSubscription } = supabase.auth.onAuthStateChange((_event, session) => {
             syncAccountFromUser(session?.user ?? null)
@@ -79,7 +73,7 @@ export function TopNav() {
                     <div className="h-9 w-px bg-slate-200" />
                     <div className="flex items-center gap-3 rounded-full border border-slate-200 bg-slate-50 py-1 pl-1 pr-3">
                         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-xs font-semibold tracking-wide text-white">
-                            {toInitials(account.name)}
+                            {formatInitials(account.name, 'A')}
                         </div>
                         <div className="hidden md:block">
                             <p className="text-sm font-semibold text-text-light">{account.name}</p>
