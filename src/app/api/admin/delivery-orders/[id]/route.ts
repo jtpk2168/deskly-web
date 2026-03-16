@@ -296,7 +296,7 @@ function getAllowedNextStatuses(current: string) {
     const normalized = current.toLowerCase()
     if (normalized === 'confirmed') return new Set(['dispatched', 'cancelled'])
     if (normalized === 'dispatched') return new Set(['delivered', 'partially_delivered', 'failed'])
-    if (normalized === 'partially_delivered') return new Set(['delivered'])
+    if (normalized === 'partially_delivered') return new Set(['delivered', 'failed'])
     if (normalized === 'failed') return new Set(['rescheduled', 'cancelled'])
     if (normalized === 'rescheduled') return new Set(['dispatched', 'cancelled'])
     return new Set<string>()

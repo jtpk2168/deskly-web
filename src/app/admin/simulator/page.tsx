@@ -135,6 +135,248 @@ function ActionButton({
     )
 }
 
+type ScenarioStep = {
+    label: string
+    system: 'billing' | 'delivery' | 'fulfillment'
+}
+
+type Scenario = {
+    id: string
+    title: string
+    description: string
+    steps: ScenarioStep[]
+}
+
+const SCENARIOS: Scenario[] = [
+    {
+        id: 'happy',
+        title: 'Happy Path — Full Delivery',
+        description: 'Customer pays, furniture gets delivered successfully on the first attempt.',
+        steps: [
+            { label: 'Payment Succeeded', system: 'billing' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Deliver', system: 'delivery' },
+        ],
+    },
+    {
+        id: 'partial-then-complete',
+        title: 'Partial Delivery, Then Complete',
+        description: 'Some items delivered first (e.g. chairs arrive, desks delayed), then the rest delivered later.',
+        steps: [
+            { label: 'Payment Succeeded', system: 'billing' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Partially Deliver', system: 'delivery' },
+            { label: 'Deliver', system: 'delivery' },
+        ],
+    },
+    {
+        id: 'failed-retry',
+        title: 'Failed Delivery — Reschedule & Retry',
+        description: 'Delivery fails (customer not present, building locked, etc.), gets rescheduled and succeeds on the second attempt.',
+        steps: [
+            { label: 'Payment Succeeded', system: 'billing' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Mark Failed', system: 'delivery' },
+            { label: 'Reschedule', system: 'delivery' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Deliver', system: 'delivery' },
+        ],
+    },
+    {
+        id: 'partial-failed-retry',
+        title: 'Partial Delivery, Follow-up Fails, Then Succeeds',
+        description: 'Some items delivered, follow-up attempt fails (e.g. truck broke down), rescheduled and completed.',
+        steps: [
+            { label: 'Payment Succeeded', system: 'billing' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Partially Deliver', system: 'delivery' },
+            { label: 'Mark Failed', system: 'delivery' },
+            { label: 'Reschedule', system: 'delivery' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Deliver', system: 'delivery' },
+        ],
+    },
+    {
+        id: 'cancel-before-dispatch',
+        title: 'Customer Cancels Before Dispatch',
+        description: 'Customer changes their mind before the furniture leaves the warehouse.',
+        steps: [
+            { label: 'Payment Succeeded', system: 'billing' },
+            { label: 'Cancel', system: 'delivery' },
+        ],
+    },
+    {
+        id: 'cancel-after-failure',
+        title: 'Cancel After Failed Delivery',
+        description: 'Delivery fails and the customer decides they no longer want the furniture.',
+        steps: [
+            { label: 'Payment Succeeded', system: 'billing' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Mark Failed', system: 'delivery' },
+            { label: 'Cancel', system: 'delivery' },
+        ],
+    },
+    {
+        id: 'payment-fails-blocks',
+        title: 'Payment Fails — Dispatch Blocked',
+        description: 'Customer\'s card is declined. Dispatch is blocked until payment recovers.',
+        steps: [
+            { label: 'Payment Failed', system: 'billing' },
+            { label: 'Dispatch (blocked!)', system: 'delivery' },
+            { label: 'Payment Succeeded', system: 'billing' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Deliver', system: 'delivery' },
+        ],
+    },
+    {
+        id: 'full-lifecycle',
+        title: 'Full Lifecycle — Delivery to Collection',
+        description: 'Complete end-to-end: pay, deliver, use for 12 months, subscription ends, collect furniture back.',
+        steps: [
+            { label: 'Payment Succeeded', system: 'billing' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Deliver', system: 'delivery' },
+            { label: 'Term Completed / Sub Cancelled', system: 'billing' },
+            { label: 'Mark Partially Collected', system: 'fulfillment' },
+            { label: 'Mark Collected & Close', system: 'fulfillment' },
+        ],
+    },
+    {
+        id: 'mid-term-cancel',
+        title: 'Mid-Term Cancellation & Collection',
+        description: 'Customer cancels subscription early. Furniture must be collected back.',
+        steps: [
+            { label: 'Payment Succeeded', system: 'billing' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Deliver', system: 'delivery' },
+            { label: 'Subscription Cancelled', system: 'billing' },
+            { label: 'Mark Collected & Close', system: 'fulfillment' },
+        ],
+    },
+    {
+        id: 'overdue-recovery',
+        title: 'Payment Overdue — Recovery',
+        description: 'Stripe marks subscription as past due after retry failures, then customer updates their card and payment succeeds.',
+        steps: [
+            { label: 'Payment Succeeded', system: 'billing' },
+            { label: 'Dispatch', system: 'delivery' },
+            { label: 'Deliver', system: 'delivery' },
+            { label: 'Payment Overdue (Past Due)', system: 'billing' },
+            { label: 'Payment Succeeded', system: 'billing' },
+        ],
+    },
+]
+
+const SYSTEM_COLORS: Record<string, string> = {
+    billing: 'bg-blue-50 text-blue-700 border-blue-200',
+    delivery: 'bg-slate-50 text-slate-700 border-slate-200',
+    fulfillment: 'bg-purple-50 text-purple-700 border-purple-200',
+}
+
+const SYSTEM_DOT_COLORS: Record<string, string> = {
+    billing: 'bg-blue-400',
+    delivery: 'bg-slate-400',
+    fulfillment: 'bg-purple-400',
+}
+
+function ScenariosGuide({
+    doStatus,
+    billingStatus,
+    serviceState,
+}: {
+    doStatus: string | null
+    billingStatus: string | null
+    serviceState: string | null
+}) {
+    const [open, setOpen] = useState(false)
+
+    // Suggest relevant scenarios based on current state
+    const suggestions = SCENARIOS.filter((s) => {
+        if (!doStatus && !billingStatus) return false
+        if (doStatus === 'confirmed' && billingStatus === 'active') return ['happy', 'partial-then-complete', 'failed-retry', 'cancel-before-dispatch'].includes(s.id)
+        if (doStatus === 'confirmed' && billingStatus === 'pending_payment') return ['payment-fails-blocks'].includes(s.id)
+        if (doStatus === 'dispatched') return ['happy', 'partial-then-complete', 'failed-retry'].includes(s.id)
+        if (doStatus === 'partially_delivered') return ['partial-then-complete', 'partial-failed-retry'].includes(s.id)
+        if (doStatus === 'failed') return ['failed-retry', 'cancel-after-failure'].includes(s.id)
+        if (doStatus === 'delivered' && serviceState === 'in_service') return ['full-lifecycle', 'mid-term-cancel'].includes(s.id)
+        if (doStatus === 'delivered' && serviceState === 'offboarding_requested') return ['full-lifecycle', 'mid-term-cancel'].includes(s.id)
+        if (billingStatus === 'payment_failed') return ['payment-fails-blocks', 'overdue-recovery'].includes(s.id)
+        return false
+    })
+
+    return (
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+            <button
+                onClick={() => setOpen(!open)}
+                className="w-full flex items-center justify-between px-4 py-3 text-left"
+            >
+                <div>
+                    <h3 className="text-sm font-semibold text-slate-700">
+                        Real-World Scenarios & Flows
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                        {suggestions.length > 0
+                            ? `${suggestions.length} scenario${suggestions.length === 1 ? '' : 's'} relevant to current state`
+                            : 'Step-by-step guides for common situations'
+                        }
+                    </p>
+                </div>
+                <span className="text-slate-400 text-sm">{open ? '▲' : '▼'}</span>
+            </button>
+
+            {open && (
+                <div className="border-t border-slate-100 px-4 pb-4">
+                    {/* Legend */}
+                    <div className="flex gap-4 py-3 text-xs text-slate-400">
+                        <span className="flex items-center gap-1.5"><span className={`inline-block w-2 h-2 rounded-full ${SYSTEM_DOT_COLORS.billing}`} /> Billing</span>
+                        <span className="flex items-center gap-1.5"><span className={`inline-block w-2 h-2 rounded-full ${SYSTEM_DOT_COLORS.delivery}`} /> Delivery</span>
+                        <span className="flex items-center gap-1.5"><span className={`inline-block w-2 h-2 rounded-full ${SYSTEM_DOT_COLORS.fulfillment}`} /> Fulfillment</span>
+                    </div>
+
+                    {/* Suggested scenarios first */}
+                    {suggestions.length > 0 && (
+                        <div className="mb-4">
+                            <p className="text-xs font-semibold text-emerald-600 uppercase tracking-wider mb-2">Suggested for current state</p>
+                            <div className="space-y-3">
+                                {suggestions.map((s) => (
+                                    <ScenarioCard key={s.id} scenario={s} highlighted />
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* All scenarios */}
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">All scenarios</p>
+                    <div className="space-y-3">
+                        {SCENARIOS.map((s) => (
+                            <ScenarioCard key={s.id} scenario={s} />
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    )
+}
+
+function ScenarioCard({ scenario, highlighted }: { scenario: Scenario; highlighted?: boolean }) {
+    return (
+        <div className={`rounded-lg border p-3 ${highlighted ? 'border-emerald-200 bg-emerald-50/30' : 'border-slate-100 bg-slate-50/50'}`}>
+            <h4 className="text-sm font-medium text-slate-700">{scenario.title}</h4>
+            <p className="text-xs text-slate-400 mt-0.5 mb-2">{scenario.description}</p>
+            <div className="flex flex-wrap gap-1.5">
+                {scenario.steps.map((step, i) => (
+                    <div key={i} className="flex items-center gap-1">
+                        {i > 0 && <span className="text-slate-300 text-xs mr-0.5">→</span>}
+                        <span className={`inline-block rounded border px-2 py-0.5 text-xs font-medium ${SYSTEM_COLORS[step.system]}`}>
+                            {step.label}
+                        </span>
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
+}
+
 let logCounter = 0
 
 export default function SimulatorPage() {
@@ -384,6 +626,13 @@ export default function SimulatorPage() {
                     </p>
                 </div>
             </div>
+
+            {/* Scenarios & Flows Reference */}
+            <ScenariosGuide
+                doStatus={state?.delivery_order.status ?? null}
+                billingStatus={state?.billing.status ?? null}
+                serviceState={state?.fulfillment.service_state ?? null}
+            />
 
             {/* Action Log + Event History */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
