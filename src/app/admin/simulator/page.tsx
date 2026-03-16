@@ -627,13 +627,6 @@ export default function SimulatorPage() {
                 </div>
             </div>
 
-            {/* Scenarios & Flows Reference */}
-            <ScenariosGuide
-                doStatus={state?.delivery_order.status ?? null}
-                billingStatus={state?.billing.status ?? null}
-                serviceState={state?.fulfillment.service_state ?? null}
-            />
-
             {/* Action Log + Event History */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {/* Action Log */}
@@ -682,6 +675,13 @@ export default function SimulatorPage() {
                     </div>
                 </div>
             </div>
+
+            {/* Scenarios & Flows Reference */}
+            <ScenariosGuide
+                doStatus={state?.delivery_order.status ?? null}
+                billingStatus={state?.billing.status ?? null}
+                serviceState={state?.fulfillment.service_state ?? null}
+            />
         </div>
     )
 }
