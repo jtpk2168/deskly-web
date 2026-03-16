@@ -15,6 +15,7 @@ type SubscriptionReferenceRecord = {
     billing_customer_id: string | null
     end_date: string | null
     commitment_end_at: string | null
+    last_provider_event_at: string | null
 }
 
 type BillingCustomerReferenceRecord = {
@@ -137,7 +138,7 @@ async function loadSubscriptionReference(subscriptionId: string | null) {
     if (!subscriptionId) return null
     const { data, error } = await supabaseServer
         .from('subscriptions')
-        .select('id, billing_customer_id, end_date, commitment_end_at')
+        .select('id, billing_customer_id, end_date, commitment_end_at, last_provider_event_at')
         .eq('id', subscriptionId)
         .maybeSingle()
 
@@ -300,6 +301,31 @@ async function syncSubscriptionInventory(subscriptionId: string) {
     throw new Error(`Subscription inventory sync failed: ${syncError}`)
 }
 
+/** Returns true if the incoming event is stale (older than the last processed event for this subscription). */
+function isStaleEvent(eventCreatedEpoch: number | null, lastProviderEventAt: string | null) {
+    if (!eventCreatedEpoch || !lastProviderEventAt) return false
+    const eventDate = new Date(eventCreatedEpoch * 1000)
+    const lastDate = new Date(lastProviderEventAt)
+    if (Number.isNaN(eventDate.getTime()) || Number.isNaN(lastDate.getTime())) return false
+    return eventDate.getTime() < lastDate.getTime()
+}
+
+async function updateSubscriptionStatusWithOrdering(
+    subscriptionId: string,
+    updatePayload: Record<string, unknown>,
+    eventCreatedEpoch: number | null,
+) {
+    const eventIso = eventCreatedEpoch ? parseIsoFromUnixTimestamp(eventCreatedEpoch) : new Date().toISOString()
+    const { error } = await supabaseServer
+        .from('subscriptions')
+        .update({
+            ...updatePayload,
+            last_provider_event_at: eventIso,
+        })
+        .eq('id', subscriptionId)
+    return error
+}
+
 async function processStripeEvent(event: StripeWebhookEvent) {
     const eventObject = readRecord(event.data?.object) ?? {}
     const metadata = typeof eventObject.metadata === 'object' && eventObject.metadata != null
@@ -342,26 +368,38 @@ async function processStripeEvent(event: StripeWebhookEvent) {
         }
     }
 
+    const eventCreatedEpoch = readNumber(event.created) ?? readNumber((event as Record<string, unknown>).created)
+
     if (event.type === 'checkout.session.completed') {
         const paymentStatus = readString(eventObject.payment_status)
         const subscriptionIdFromSession = readString(eventObject.subscription)
         const status = paymentStatus === 'paid' ? 'active' : 'pending_payment'
 
-        const { error } = await supabaseServer
-            .from('subscriptions')
-            .update({
+        const error = await updateSubscriptionStatusWithOrdering(
+            resolvedSubscriptionId,
+            {
                 status,
                 provider_checkout_session_id: providerCheckoutSessionId,
                 provider_subscription_id: subscriptionIdFromSession,
-            })
-            .eq('id', resolvedSubscriptionId)
+            },
+            eventCreatedEpoch,
+        )
 
         if (error) {
             throw new Error(`Failed to update checkout session status: ${error.message}`)
         }
 
         if (status === 'active') {
-            await syncSubscriptionInventory(resolvedSubscriptionId)
+            try {
+                await syncSubscriptionInventory(resolvedSubscriptionId)
+            } catch (syncError) {
+                // Rollback status so the subscription doesn't stay active without inventory.
+                await supabaseServer
+                    .from('subscriptions')
+                    .update({ status: 'pending_payment' })
+                    .eq('id', resolvedSubscriptionId)
+                throw syncError
+            }
         }
 
         return { subscriptionId: resolvedSubscriptionId, handled: true }
@@ -377,6 +415,11 @@ async function processStripeEvent(event: StripeWebhookEvent) {
         const canceledAtIso = parseIsoFromUnixTimestamp(readNumber(eventObject.canceled_at))
         const existingSubscription = await loadSubscriptionReference(resolvedSubscriptionId)
 
+        // Guard: skip out-of-order events that would regress subscription status.
+        if (isStaleEvent(eventCreatedEpoch, existingSubscription?.last_provider_event_at ?? null)) {
+            return { subscriptionId: resolvedSubscriptionId, handled: true }
+        }
+
         // Stripe timestamps differ for immediate cancel vs period-end cancel.
         // For cancel-at-period-end, service end should mirror current_period_end.
         const persistedEndDate = readString(existingSubscription?.end_date)
@@ -387,31 +430,46 @@ async function processStripeEvent(event: StripeWebhookEvent) {
                 ? (canceledAtIso ?? periodEndIso ?? persistedEndDate ?? commitmentEndDate)
                 : (persistedEndDate ?? commitmentEndDate ?? periodEndIso)
 
-        const { error } = await supabaseServer
-            .from('subscriptions')
-            .update({
+        const error = await updateSubscriptionStatusWithOrdering(
+            resolvedSubscriptionId,
+            {
                 status: billingStatus,
                 provider_subscription_id: providerSubscriptionId,
                 end_date: effectiveEndDate,
-            })
-            .eq('id', resolvedSubscriptionId)
+            },
+            eventCreatedEpoch,
+        )
 
         if (error) {
             throw new Error(`Failed to update subscription lifecycle: ${error.message}`)
         }
 
         if (billingStatus === 'active') {
-            await syncSubscriptionInventory(resolvedSubscriptionId)
+            try {
+                await syncSubscriptionInventory(resolvedSubscriptionId)
+            } catch (syncError) {
+                await supabaseServer
+                    .from('subscriptions')
+                    .update({ status: 'pending_payment' })
+                    .eq('id', resolvedSubscriptionId)
+                throw syncError
+            }
         }
 
         return { subscriptionId: resolvedSubscriptionId, handled: true }
     }
 
     if (event.type === 'invoice.payment_failed') {
-        const { error } = await supabaseServer
-            .from('subscriptions')
-            .update({ status: 'payment_failed' })
-            .eq('id', resolvedSubscriptionId)
+        const existingForInvoiceFailed = await loadSubscriptionReference(resolvedSubscriptionId)
+        if (isStaleEvent(eventCreatedEpoch, existingForInvoiceFailed?.last_provider_event_at ?? null)) {
+            return { subscriptionId: resolvedSubscriptionId, handled: true }
+        }
+
+        const error = await updateSubscriptionStatusWithOrdering(
+            resolvedSubscriptionId,
+            { status: 'payment_failed' },
+            eventCreatedEpoch,
+        )
 
         if (error) {
             throw new Error(`Failed to mark payment failed: ${error.message}`)
@@ -421,16 +479,41 @@ async function processStripeEvent(event: StripeWebhookEvent) {
     }
 
     if (event.type === 'invoice.paid' || event.type === 'invoice.payment_succeeded') {
-        const { error } = await supabaseServer
-            .from('subscriptions')
-            .update({ status: 'active' })
-            .eq('id', resolvedSubscriptionId)
+        const existingForInvoicePaid = await loadSubscriptionReference(resolvedSubscriptionId)
+        if (isStaleEvent(eventCreatedEpoch, existingForInvoicePaid?.last_provider_event_at ?? null)) {
+            return { subscriptionId: resolvedSubscriptionId, handled: true }
+        }
+
+        const previousStatus = existingForInvoicePaid
+            ? (await supabaseServer
+                .from('subscriptions')
+                .select('status')
+                .eq('id', resolvedSubscriptionId)
+                .maybeSingle()
+            ).data?.status as string | null ?? null
+            : null
+
+        const error = await updateSubscriptionStatusWithOrdering(
+            resolvedSubscriptionId,
+            { status: 'active' },
+            eventCreatedEpoch,
+        )
 
         if (error) {
             throw new Error(`Failed to mark invoice paid: ${error.message}`)
         }
 
-        await syncSubscriptionInventory(resolvedSubscriptionId)
+        try {
+            await syncSubscriptionInventory(resolvedSubscriptionId)
+        } catch (syncError) {
+            // Rollback to previous status so the subscription doesn't stay active without inventory.
+            const rollbackStatus = previousStatus ?? 'pending_payment'
+            await supabaseServer
+                .from('subscriptions')
+                .update({ status: rollbackStatus })
+                .eq('id', resolvedSubscriptionId)
+            throw syncError
+        }
 
         return { subscriptionId: resolvedSubscriptionId, handled: true }
     }

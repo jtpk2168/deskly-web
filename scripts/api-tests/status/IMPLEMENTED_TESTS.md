@@ -6,7 +6,7 @@ This document describes every implemented scenario in the Delivery Order + Subsc
 - Harness location: `scripts/api-tests/status/`
 - Runner: `scripts/api-tests/status/runner.ts`
 - Scenario source: `scripts/api-tests/status/scenarios.ts`
-- Total implemented scenarios: `23`
+- Total implemented scenarios: `42`
 
 ## Real APIs used by scenarios
 - `POST /api/subscriptions`
@@ -25,8 +25,8 @@ This document describes every implemented scenario in the Delivery Order + Subsc
   - `not_collected`, `partially_collected`, `collected`
 
 ## Lane execution
-- `local-status`: Packs `A-F` (21 scenarios)
-- `local-status-deep`: Packs `A-G` (23 scenarios, includes race tests)
+- `local-status`: Packs `A-F`, `H-M` (40 scenarios)
+- `local-status-deep`: Packs `A-M` (42 scenarios, includes race tests)
 
 ## Evidence contract
 Every scenario stores required evidence fields:
@@ -89,6 +89,49 @@ The harness also records optional context when present (`webhookEventId`, `idemp
 |---|---|---|---|
 | `STATUS-G-001` | `local-status-deep` | Double retry with identical PATCH payload. | Two concurrent `failed` PATCH calls both return `200`; final DO state is consistently `failed` with reason. |
 | `STATUS-G-002` | `local-status-deep` | Concurrent conflicting transitions. | Concurrent `failed` vs `delivered` yields exactly one `200` and one `409`; final DO state is either `failed` or `delivered` (single winner). |
+
+## Pack H: Billing lifecycle
+| ID | Lanes | What it tests | Key assertions |
+|---|---|---|---|
+| `STATUS-H-001` | `local-status`, `local-status-deep` | `invoice.paid` webhook transitions subscription to active. | Subscription status becomes `active` after webhook. |
+| `STATUS-H-002` | `local-status`, `local-status-deep` | `invoice.payment_failed` transitions active to payment_failed. | Active subscription becomes `payment_failed` after webhook. |
+| `STATUS-H-003` | `local-status`, `local-status-deep` | Recovery: payment_failed back to active via `invoice.paid`. | `payment_failed` → `active` transition asserted. |
+| `STATUS-H-004` | `local-status`, `local-status-deep` | `customer.subscription.deleted` sets cancelled. | Subscription status becomes `cancelled` after deletion webhook. |
+| `STATUS-H-005` | `local-status`, `local-status-deep` | `customer.subscription.updated` with `past_due` sets payment_failed. | Subscription status becomes `payment_failed` via Stripe status mapping. |
+
+## Pack I: Fulfillment collection lifecycle
+| ID | Lanes | What it tests | Key assertions |
+|---|---|---|---|
+| `STATUS-I-001` | `local-status`, `local-status-deep` | Full collection flow: offboarding → partial → close. | Final state is `closed/collected`. Intermediate states verified at each step. |
+| `STATUS-I-002` | `local-status`, `local-status-deep` | `mark_collected_and_close` without note returns 400. | API returns `400` with `note is required`. |
+| `STATUS-I-003` | `local-status`, `local-status-deep` | `mark_partially_collected` rejected when service_state is in_service. | API returns `409` — action requires `offboarding_requested`. |
+| `STATUS-I-004` | `local-status`, `local-status-deep` | Fulfillment events audit trail correctness. | At least 2 events created. `from_collection_status`, `to_collection_status`, `to_service_state`, and `note` verified. |
+
+## Pack J: Webhook edge cases
+| ID | Lanes | What it tests | Key assertions |
+|---|---|---|---|
+| `STATUS-J-001` | `local-status`, `local-status-deep` | Duplicate webhook event returns `duplicate: true`. | Second call with same `event.id` returns `200` with `duplicate=true`. |
+| `STATUS-J-002` | `local-status`, `local-status-deep` | Invalid webhook signature returns 400. | Malformed `stripe-signature` header yields `400`. |
+| `STATUS-J-003` | `local-status`, `local-status-deep` | Empty/whitespace `failure_reason` returns 400. | `"   "` and `""` both rejected with `failure_reason is required`. |
+
+## Pack K: Field clearing and edge cases
+| ID | Lanes | What it tests | Key assertions |
+|---|---|---|---|
+| `STATUS-K-001` | `local-status`, `local-status-deep` | Conditional fields are nulled on transition away. | `failure_reason` null after reschedule, `rescheduled_at` null after dispatch. |
+| `STATUS-K-002` | `local-status`, `local-status-deep` | Cancelled state persists reason and clears others. | `cancelled_reason` set, `failure_reason` and `rescheduled_at` are null. |
+| `STATUS-K-003` | `local-status`, `local-status-deep` | PATCH with `service_state` or `collection_status` returns 400. | Locked fulfillment fields rejected with `managed by admin actions`. |
+
+## Pack L: Delivery order audit trail
+| ID | Lanes | What it tests | Key assertions |
+|---|---|---|---|
+| `STATUS-L-001` | `local-status`, `local-status-deep` | Happy path transitions are logged. | 2 events: confirmed→dispatched, dispatched→delivered with correct from/to. |
+| `STATUS-L-002` | `local-status`, `local-status-deep` | Failure and cancel reasons captured in events. | `failure_reason` and `cancelled_reason` persisted in event rows. |
+| `STATUS-L-003` | `local-status`, `local-status-deep` | Idempotent same-status PATCH does not create event. | Only 1 event after dispatch + repeat dispatch. |
+
+## Pack M: Webhook ordering guard
+| ID | Lanes | What it tests | Key assertions |
+|---|---|---|---|
+| `STATUS-M-001` | `local-status`, `local-status-deep` | Out-of-order stale event does not regress billing status. | After `invoice.paid` (recent), a stale `invoice.payment_failed` (epoch 1970) is accepted but status remains `active`. |
 
 ## Notes on setup/verify/cleanup
 - Setup and verification use Supabase service-role credentials.

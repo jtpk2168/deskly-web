@@ -3,7 +3,7 @@ import type { Evidence } from '../types'
 export const STATUS_LANES = ['local-status', 'local-status-deep'] as const
 export type StatusLane = (typeof STATUS_LANES)[number]
 
-export const STATUS_PACKS = ['A', 'B', 'C', 'D', 'E', 'F', 'G'] as const
+export const STATUS_PACKS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'] as const
 export type StatusPack = (typeof STATUS_PACKS)[number]
 
 export type ScenarioStatus = 'pass' | 'fail'

@@ -7,11 +7,15 @@ import {
     createServiceRoleClient,
     createSubscriptionForUser,
     expectStatus,
+    expectStatusOneOf,
     patchDeliveryOrder,
     postFulfillmentAction,
     sendStripeWebhook,
+    getDeliveryOrderEvents,
     getDeliveryOrderState,
+    getFulfillmentEvents,
     getFulfillmentState,
+    getInvoiceCountBySubscription,
     getSubscriptionStatus,
 } from './helpers'
 import type { ApiCallResult, ScenarioContext, ScenarioDefinition, ScenarioState } from './types'
@@ -695,6 +699,634 @@ export const STATUS_SCENARIOS: ScenarioDefinition[] = [
             )
 
             await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Pack H: Subscription billing lifecycle transitions
+    // ──────────────────────────────────────────────────────────────────────────
+
+    {
+        id: 'STATUS-H-001',
+        title: 'Pack H / billing lifecycle: invoice.paid transitions subscription to active',
+        pack: 'H',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await createFixture(ctx, state, 'h001')
+
+            const statusBefore = await getSubscriptionStatus(ctx, fixture.subscriptionId)
+            state.dbBeforeAfterKeys.before = [
+                `subscription:${fixture.subscriptionId}:status=${statusBefore ?? 'null'}`,
+            ]
+
+            await sendStripeWebhook(ctx, state, 'invoice.paid', fixture.subscriptionId)
+
+            const statusAfter = await getSubscriptionStatus(ctx, fixture.subscriptionId)
+            assert(statusAfter === 'active', `Expected active after invoice.paid, got ${statusAfter ?? 'null'}`)
+
+            state.dbBeforeAfterKeys.after = [
+                `subscription:${fixture.subscriptionId}:status=${statusAfter ?? 'null'}`,
+            ]
+        },
+    },
+    {
+        id: 'STATUS-H-002',
+        title: 'Pack H / billing lifecycle: invoice.payment_failed transitions active to payment_failed',
+        pack: 'H',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await createFixture(ctx, state, 'h002')
+            await ensureActive(ctx, state, fixture.subscriptionId)
+
+            state.dbBeforeAfterKeys.before = [
+                `subscription:${fixture.subscriptionId}:status=active`,
+            ]
+
+            await sendStripeWebhook(ctx, state, 'invoice.payment_failed', fixture.subscriptionId)
+
+            const statusAfter = await getSubscriptionStatus(ctx, fixture.subscriptionId)
+            assert(statusAfter === 'payment_failed', `Expected payment_failed after invoice.payment_failed, got ${statusAfter ?? 'null'}`)
+
+            state.dbBeforeAfterKeys.after = [
+                `subscription:${fixture.subscriptionId}:status=${statusAfter ?? 'null'}`,
+            ]
+        },
+    },
+    {
+        id: 'STATUS-H-003',
+        title: 'Pack H / billing lifecycle: payment_failed recovers to active via invoice.paid',
+        pack: 'H',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await createFixture(ctx, state, 'h003')
+            await ensureActive(ctx, state, fixture.subscriptionId)
+            await ensurePaymentFailed(ctx, state, fixture.subscriptionId)
+
+            state.dbBeforeAfterKeys.before = [
+                `subscription:${fixture.subscriptionId}:status=payment_failed`,
+            ]
+
+            await sendStripeWebhook(ctx, state, 'invoice.paid', fixture.subscriptionId)
+
+            const statusAfter = await getSubscriptionStatus(ctx, fixture.subscriptionId)
+            assert(statusAfter === 'active', `Expected active after recovery via invoice.paid, got ${statusAfter ?? 'null'}`)
+
+            state.dbBeforeAfterKeys.after = [
+                `subscription:${fixture.subscriptionId}:status=${statusAfter ?? 'null'}`,
+            ]
+        },
+    },
+    {
+        id: 'STATUS-H-004',
+        title: 'Pack H / billing lifecycle: customer.subscription.deleted transitions to cancelled and sets offboarding',
+        pack: 'H',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await createFixture(ctx, state, 'h004')
+            await ensureActive(ctx, state, fixture.subscriptionId)
+
+            state.dbBeforeAfterKeys.before = [
+                `subscription:${fixture.subscriptionId}:status=active`,
+            ]
+
+            await sendStripeWebhook(ctx, state, 'customer.subscription.deleted', fixture.subscriptionId)
+
+            const statusAfter = await getSubscriptionStatus(ctx, fixture.subscriptionId)
+            assert(statusAfter === 'cancelled', `Expected cancelled after subscription.deleted, got ${statusAfter ?? 'null'}`)
+
+            state.dbBeforeAfterKeys.after = [
+                `subscription:${fixture.subscriptionId}:status=${statusAfter ?? 'null'}`,
+            ]
+        },
+    },
+    {
+        id: 'STATUS-H-005',
+        title: 'Pack H / billing lifecycle: customer.subscription.updated with past_due sets payment_failed',
+        pack: 'H',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await createFixture(ctx, state, 'h005')
+            await ensureActive(ctx, state, fixture.subscriptionId)
+
+            state.dbBeforeAfterKeys.before = [
+                `subscription:${fixture.subscriptionId}:status=active`,
+            ]
+
+            await sendStripeWebhook(ctx, state, 'customer.subscription.updated', fixture.subscriptionId, {
+                subscriptionStatus: 'past_due',
+            })
+
+            const statusAfter = await getSubscriptionStatus(ctx, fixture.subscriptionId)
+            assert(statusAfter === 'payment_failed', `Expected payment_failed after subscription.updated with past_due, got ${statusAfter ?? 'null'}`)
+
+            state.dbBeforeAfterKeys.after = [
+                `subscription:${fixture.subscriptionId}:status=${statusAfter ?? 'null'}`,
+            ]
+        },
+    },
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Pack I: Fulfillment collection lifecycle
+    // ──────────────────────────────────────────────────────────────────────────
+
+    {
+        id: 'STATUS-I-001',
+        title: 'Pack I / collection lifecycle: offboarding -> partial collection -> close',
+        pack: 'I',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'i001')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+
+            // Deliver first so fulfillment row exists with in_service
+            await dispatchOrder(ctx, state, fixture.deliveryOrderId)
+            await deliverOrder(ctx, state, fixture.deliveryOrderId)
+
+            // Cancel subscription to trigger offboarding_requested
+            await ensureCancelled(ctx, state, fixture.subscriptionId)
+
+            const afterCancel = await getFulfillmentState(ctx, fixture.subscriptionId)
+            assert(afterCancel?.service_state === 'offboarding_requested', `Expected offboarding_requested after cancel, got ${String(afterCancel?.service_state ?? 'null')}`)
+
+            // Mark partially collected
+            const partialCall = await postFulfillmentAction(ctx, state, fixture.deliveryOrderId, 'mark_partially_collected')
+            expectStatus(partialCall, 200, 'mark partially collected')
+
+            const afterPartial = await getFulfillmentState(ctx, fixture.subscriptionId)
+            assert(afterPartial?.collection_status === 'partially_collected', `Expected partially_collected, got ${String(afterPartial?.collection_status ?? 'null')}`)
+            assert(afterPartial?.service_state === 'offboarding_requested', `Expected service_state to remain offboarding_requested, got ${String(afterPartial?.service_state ?? 'null')}`)
+
+            // Mark collected and close
+            const closeCall = await postFulfillmentAction(ctx, state, fixture.deliveryOrderId, 'mark_collected_and_close', 'all items returned and verified')
+            expectStatus(closeCall, 200, 'mark collected and close')
+
+            const finalFulfillment = await getFulfillmentState(ctx, fixture.subscriptionId)
+            assert(finalFulfillment?.service_state === 'closed', `Expected closed, got ${String(finalFulfillment?.service_state ?? 'null')}`)
+            assert(finalFulfillment?.collection_status === 'collected', `Expected collected, got ${String(finalFulfillment?.collection_status ?? 'null')}`)
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+    {
+        id: 'STATUS-I-002',
+        title: 'Pack I / collection validation: mark_collected_and_close without note returns 400',
+        pack: 'I',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'i002')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+
+            await dispatchOrder(ctx, state, fixture.deliveryOrderId)
+            await deliverOrder(ctx, state, fixture.deliveryOrderId)
+            await ensureCancelled(ctx, state, fixture.subscriptionId)
+
+            // Attempt close without note via raw API call
+            const closeWithoutNote = await callApi(ctx, state, {
+                method: 'POST',
+                path: `/api/admin/delivery-orders/${fixture.deliveryOrderId}`,
+                jsonBody: { action: 'mark_collected_and_close' },
+            })
+            expectStatus(closeWithoutNote, 400, 'close without note should be rejected')
+            expectErrorContains(closeWithoutNote, 'note is required', 'close requires note')
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+    {
+        id: 'STATUS-I-003',
+        title: 'Pack I / collection validation: mark_partially_collected rejected when not offboarding',
+        pack: 'I',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'i003')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+
+            await dispatchOrder(ctx, state, fixture.deliveryOrderId)
+            await deliverOrder(ctx, state, fixture.deliveryOrderId)
+
+            // service_state is in_service — mark_partially_collected should fail
+            const partialCall = await postFulfillmentAction(ctx, state, fixture.deliveryOrderId, 'mark_partially_collected')
+            expectStatus(partialCall, 409, 'partial collection from in_service should be rejected')
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+    {
+        id: 'STATUS-I-004',
+        title: 'Pack I / collection audit trail: fulfillment events recorded correctly',
+        pack: 'I',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'i004')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+
+            await dispatchOrder(ctx, state, fixture.deliveryOrderId)
+            await deliverOrder(ctx, state, fixture.deliveryOrderId)
+            await ensureCancelled(ctx, state, fixture.subscriptionId)
+
+            await postFulfillmentAction(ctx, state, fixture.deliveryOrderId, 'mark_partially_collected')
+            await postFulfillmentAction(ctx, state, fixture.deliveryOrderId, 'mark_collected_and_close', 'final collection verified')
+
+            const events = await getFulfillmentEvents(ctx, fixture.subscriptionId)
+            assert(events.length >= 2, `Expected at least 2 fulfillment events, got ${events.length}`)
+
+            const partialEvent = events.find((e) => e.action === 'mark_partially_collected')
+            assert(partialEvent, 'Expected mark_partially_collected event in audit trail')
+            assert(partialEvent?.from_collection_status === 'not_collected', `Expected from_collection_status=not_collected, got ${String(partialEvent?.from_collection_status)}`)
+            assert(partialEvent?.to_collection_status === 'partially_collected', `Expected to_collection_status=partially_collected, got ${String(partialEvent?.to_collection_status)}`)
+
+            const closeEvent = events.find((e) => e.action === 'mark_collected_and_close')
+            assert(closeEvent, 'Expected mark_collected_and_close event in audit trail')
+            assert(closeEvent?.to_service_state === 'closed', `Expected to_service_state=closed, got ${String(closeEvent?.to_service_state)}`)
+            assert(closeEvent?.to_collection_status === 'collected', `Expected to_collection_status=collected, got ${String(closeEvent?.to_collection_status)}`)
+            assert(closeEvent?.note === 'final collection verified', `Expected note to match, got ${String(closeEvent?.note)}`)
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Pack J: Webhook edge cases
+    // ──────────────────────────────────────────────────────────────────────────
+
+    {
+        id: 'STATUS-J-001',
+        title: 'Pack J / webhook idempotency: duplicate event returns duplicate=true',
+        pack: 'J',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await createFixture(ctx, state, 'j001')
+
+            state.dbBeforeAfterKeys.before = [
+                `subscription:${fixture.subscriptionId}:pre_webhook`,
+            ]
+
+            // First webhook call
+            const firstResult = await sendStripeWebhook(ctx, state, 'invoice.paid', fixture.subscriptionId)
+            expectStatus(firstResult.call, 200, 'first webhook dispatch')
+
+            // Re-send the exact same event by using the same event ID
+            // We need to manually construct this since sendStripeWebhook generates a new ID
+            const { createHmac } = await import('node:crypto')
+            const nowEpoch = Math.floor(Date.now() / 1000)
+            const duplicatePayload = JSON.stringify({
+                id: firstResult.eventId,
+                type: 'invoice.paid',
+                created: nowEpoch,
+                data: {
+                    object: {
+                        id: `in_dup_${ctx.runId}`,
+                        metadata: { internal_subscription_id: fixture.subscriptionId },
+                        subscription: `sub_dup_${ctx.runId}`,
+                        customer: `cus_dup_${ctx.runId}`,
+                        status: 'paid',
+                        paid: true,
+                        currency: 'myr',
+                        subtotal: 10000,
+                        total: 10800,
+                        amount_paid: 10800,
+                        amount_due: 0,
+                        period_start: nowEpoch,
+                        period_end: nowEpoch + 60 * 60 * 24 * 30,
+                        status_transitions: { paid_at: nowEpoch },
+                    },
+                },
+            })
+            const signedPayload = `${nowEpoch}.${duplicatePayload}`
+            const digest = createHmac('sha256', ctx.stripeWebhookSecret).update(signedPayload, 'utf8').digest('hex')
+            const signature = `t=${nowEpoch},v1=${digest}`
+
+            const duplicateCall = await callApi(ctx, state, {
+                method: 'POST',
+                path: '/api/webhooks/stripe',
+                rawBody: duplicatePayload,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'stripe-signature': signature,
+                },
+            })
+            expectStatus(duplicateCall, 200, 'duplicate webhook should still return 200')
+
+            const duplicateBody = duplicateCall.body as Record<string, unknown> | null
+            const dataField = duplicateBody?.data as Record<string, unknown> | undefined
+            assert(dataField?.duplicate === true, `Expected duplicate=true in response, got ${JSON.stringify(dataField)}`)
+
+            state.dbBeforeAfterKeys.after = [
+                `subscription:${fixture.subscriptionId}:duplicate_webhook_handled`,
+            ]
+        },
+    },
+    {
+        id: 'STATUS-J-002',
+        title: 'Pack J / webhook validation: invalid signature returns 400',
+        pack: 'J',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await createFixture(ctx, state, 'j002')
+
+            state.dbBeforeAfterKeys.before = [
+                `subscription:${fixture.subscriptionId}:pre_bad_signature`,
+            ]
+
+            const payload = JSON.stringify({
+                id: `evt_bad_sig_${ctx.runId}`,
+                type: 'invoice.paid',
+                created: Math.floor(Date.now() / 1000),
+                data: {
+                    object: {
+                        id: `in_bad_${ctx.runId}`,
+                        metadata: { internal_subscription_id: fixture.subscriptionId },
+                        status: 'paid',
+                        paid: true,
+                    },
+                },
+            })
+
+            const badSignatureCall = await callApi(ctx, state, {
+                method: 'POST',
+                path: '/api/webhooks/stripe',
+                rawBody: payload,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'stripe-signature': 't=1234567890,v1=invalidsignaturehash',
+                },
+            })
+            expectStatus(badSignatureCall, 400, 'invalid signature should return 400')
+
+            state.dbBeforeAfterKeys.after = [
+                `subscription:${fixture.subscriptionId}:bad_signature_rejected`,
+            ]
+        },
+    },
+    {
+        id: 'STATUS-J-003',
+        title: 'Pack J / field validation: empty/whitespace failure_reason returns 400',
+        pack: 'J',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'j003')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+            await dispatchOrder(ctx, state, fixture.deliveryOrderId)
+
+            const whitespaceReason = await patchDeliveryOrder(ctx, state, fixture.deliveryOrderId, {
+                do_status: 'failed',
+                failure_reason: '   ',
+            })
+            expectStatus(whitespaceReason, 400, 'whitespace-only failure_reason should be rejected')
+            expectErrorContains(whitespaceReason, 'failure_reason is required', 'whitespace failure_reason validation')
+
+            const emptyReason = await patchDeliveryOrder(ctx, state, fixture.deliveryOrderId, {
+                do_status: 'failed',
+                failure_reason: '',
+            })
+            expectStatus(emptyReason, 400, 'empty failure_reason should be rejected')
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Pack K: Field clearing and edge cases
+    // ──────────────────────────────────────────────────────────────────────────
+
+    {
+        id: 'STATUS-K-001',
+        title: 'Pack K / field clearing: conditional fields are nulled on transition away',
+        pack: 'K',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'k001')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+
+            await dispatchOrder(ctx, state, fixture.deliveryOrderId)
+            await failOrder(ctx, state, fixture.deliveryOrderId, 'building access issue')
+
+            // Verify failure_reason is set
+            const afterFailed = await getDeliveryOrderState(ctx, fixture.deliveryOrderId)
+            assert(afterFailed.failure_reason === 'building access issue', `Expected failure_reason set, got ${String(afterFailed.failure_reason)}`)
+
+            await rescheduleOrder(ctx, state, fixture.deliveryOrderId, new Date(Date.now() + 60 * 60 * 24 * 1000).toISOString())
+
+            // After rescheduled, failure_reason should be cleared
+            const afterRescheduled = await getDeliveryOrderState(ctx, fixture.deliveryOrderId)
+            assert(afterRescheduled.failure_reason === null, `Expected failure_reason null after reschedule, got ${String(afterRescheduled.failure_reason)}`)
+            assert(afterRescheduled.rescheduled_at !== null, 'Expected rescheduled_at to be set')
+
+            await dispatchOrder(ctx, state, fixture.deliveryOrderId)
+
+            // After dispatched, rescheduled_at should be cleared
+            const afterDispatched = await getDeliveryOrderState(ctx, fixture.deliveryOrderId)
+            assert(afterDispatched.rescheduled_at === null, `Expected rescheduled_at null after dispatch, got ${String(afterDispatched.rescheduled_at)}`)
+            assert(afterDispatched.failure_reason === null, `Expected failure_reason still null, got ${String(afterDispatched.failure_reason)}`)
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+    {
+        id: 'STATUS-K-002',
+        title: 'Pack K / edge case: cancelled_reason cleared after cancel persists correctly',
+        pack: 'K',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'k002')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+
+            await cancelOrder(ctx, state, fixture.deliveryOrderId, 'customer changed their mind')
+
+            const afterCancel = await getDeliveryOrderState(ctx, fixture.deliveryOrderId)
+            assert(afterCancel.do_status === 'cancelled', `Expected cancelled, got ${String(afterCancel.do_status)}`)
+            assert(afterCancel.cancelled_reason === 'customer changed their mind', `Expected cancelled_reason, got ${String(afterCancel.cancelled_reason)}`)
+            assert(afterCancel.failure_reason === null, `Expected failure_reason null in cancelled state, got ${String(afterCancel.failure_reason)}`)
+            assert(afterCancel.rescheduled_at === null, `Expected rescheduled_at null in cancelled state, got ${String(afterCancel.rescheduled_at)}`)
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+    {
+        id: 'STATUS-K-003',
+        title: 'Pack K / locked fields: PATCH with service_state or collection_status returns 400',
+        pack: 'K',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'k003')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+
+            const serviceStateEdit = await patchDeliveryOrder(ctx, state, fixture.deliveryOrderId, {
+                do_status: 'dispatched',
+                service_state: 'closed',
+            })
+            expectStatus(serviceStateEdit, 400, 'service_state in PATCH should be rejected')
+            expectErrorContains(serviceStateEdit, 'managed by admin actions', 'locked field guard')
+
+            const collectionStatusEdit = await patchDeliveryOrder(ctx, state, fixture.deliveryOrderId, {
+                do_status: 'dispatched',
+                collection_status: 'collected',
+            })
+            expectStatus(collectionStatusEdit, 400, 'collection_status in PATCH should be rejected')
+            expectErrorContains(collectionStatusEdit, 'managed by admin actions', 'locked field guard')
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Pack L: Delivery order audit trail
+    // ──────────────────────────────────────────────────────────────────────────
+
+    {
+        id: 'STATUS-L-001',
+        title: 'Pack L / audit trail: happy path transitions are logged',
+        pack: 'L',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'l001')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+
+            await dispatchOrder(ctx, state, fixture.deliveryOrderId)
+            await deliverOrder(ctx, state, fixture.deliveryOrderId)
+
+            const events = await getDeliveryOrderEvents(ctx, fixture.deliveryOrderId)
+            assert(events.length === 2, `Expected 2 DO events, got ${events.length}`)
+
+            assert(events[0]?.from_status === 'confirmed', `Expected first event from_status=confirmed, got ${String(events[0]?.from_status)}`)
+            assert(events[0]?.to_status === 'dispatched', `Expected first event to_status=dispatched, got ${String(events[0]?.to_status)}`)
+
+            assert(events[1]?.from_status === 'dispatched', `Expected second event from_status=dispatched, got ${String(events[1]?.from_status)}`)
+            assert(events[1]?.to_status === 'delivered', `Expected second event to_status=delivered, got ${String(events[1]?.to_status)}`)
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+    {
+        id: 'STATUS-L-002',
+        title: 'Pack L / audit trail: failure and cancel reasons are captured in events',
+        pack: 'L',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'l002')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+
+            await dispatchOrder(ctx, state, fixture.deliveryOrderId)
+            await failOrder(ctx, state, fixture.deliveryOrderId, 'gate locked')
+            await cancelOrder(ctx, state, fixture.deliveryOrderId, 'customer gave up')
+
+            const events = await getDeliveryOrderEvents(ctx, fixture.deliveryOrderId)
+            assert(events.length === 3, `Expected 3 DO events, got ${events.length}`)
+
+            const failEvent = events.find((e) => e.to_status === 'failed')
+            assert(failEvent, 'Expected a failed event in audit trail')
+            assert(failEvent?.failure_reason === 'gate locked', `Expected failure_reason in event, got ${String(failEvent?.failure_reason)}`)
+
+            const cancelEvent = events.find((e) => e.to_status === 'cancelled')
+            assert(cancelEvent, 'Expected a cancelled event in audit trail')
+            assert(cancelEvent?.cancelled_reason === 'customer gave up', `Expected cancelled_reason in event, got ${String(cancelEvent?.cancelled_reason)}`)
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+    {
+        id: 'STATUS-L-003',
+        title: 'Pack L / audit trail: idempotent same-status PATCH does not create event',
+        pack: 'L',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await bootstrapActiveFixture(ctx, state, 'l003')
+            await setBeforeAfterForFixture(ctx, state, fixture, 'before')
+
+            await dispatchOrder(ctx, state, fixture.deliveryOrderId)
+
+            // Send the same status again (idempotent path)
+            const idempotentCall = await patchDeliveryOrder(ctx, state, fixture.deliveryOrderId, {
+                do_status: 'dispatched',
+            })
+            expectStatus(idempotentCall, 200, 'idempotent same-status should succeed')
+
+            const events = await getDeliveryOrderEvents(ctx, fixture.deliveryOrderId)
+            // Only the first dispatch should be logged, not the repeat
+            assert(events.length === 1, `Expected exactly 1 DO event (no duplicate), got ${events.length}`)
+            assert(events[0]?.to_status === 'dispatched', `Expected to_status=dispatched, got ${String(events[0]?.to_status)}`)
+
+            await setBeforeAfterForFixture(ctx, state, fixture, 'after')
+        },
+    },
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Pack M: Webhook ordering guard
+    // ──────────────────────────────────────────────────────────────────────────
+
+    {
+        id: 'STATUS-M-001',
+        title: 'Pack M / webhook ordering: out-of-order event does not regress billing status',
+        pack: 'M',
+        lanes: [...STATUS_LANES_BASE],
+        run: async (ctx, state) => {
+            const fixture = await createFixture(ctx, state, 'm001')
+
+            state.dbBeforeAfterKeys.before = [
+                `subscription:${fixture.subscriptionId}:pre_ordering_test`,
+            ]
+
+            // Step 1: Send a recent invoice.paid → active
+            await sendStripeWebhook(ctx, state, 'invoice.paid', fixture.subscriptionId)
+            const afterPaid = await getSubscriptionStatus(ctx, fixture.subscriptionId)
+            assert(afterPaid === 'active', `Expected active after invoice.paid, got ${afterPaid ?? 'null'}`)
+
+            // Step 2: Send a STALE invoice.payment_failed with an older timestamp.
+            // We forge a webhook with created=1 (epoch 1970) to simulate an old event.
+            const { createHmac } = await import('node:crypto')
+            const staleEpoch = 1 // 1970-01-01 — definitely older than the invoice.paid above
+            const nowEpoch = Math.floor(Date.now() / 1000)
+            ctx.webhookSequence.current += 1
+            const seq = ctx.webhookSequence.current
+            const staleEventId = `evt_stale_${ctx.runId}_${seq}`
+            const stalePayload = JSON.stringify({
+                id: staleEventId,
+                type: 'invoice.payment_failed',
+                created: staleEpoch,
+                data: {
+                    object: {
+                        id: `in_stale_${ctx.runId}_${seq}`,
+                        metadata: { internal_subscription_id: fixture.subscriptionId },
+                        subscription: `sub_stale_${ctx.runId}_${seq}`,
+                        customer: `cus_stale_${ctx.runId}_${seq}`,
+                        status: 'open',
+                        paid: false,
+                        currency: 'myr',
+                        subtotal: 10000,
+                        total: 10800,
+                        amount_paid: 0,
+                        amount_due: 10800,
+                        period_start: staleEpoch,
+                        period_end: staleEpoch + 60 * 60 * 24 * 30,
+                        status_transitions: { paid_at: null },
+                    },
+                },
+            })
+            const signedPayload = `${nowEpoch}.${stalePayload}`
+            const digest = createHmac('sha256', ctx.stripeWebhookSecret).update(signedPayload, 'utf8').digest('hex')
+            const signature = `t=${nowEpoch},v1=${digest}`
+
+            const staleCall = await callApi(ctx, state, {
+                method: 'POST',
+                path: '/api/webhooks/stripe',
+                rawBody: stalePayload,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'stripe-signature': signature,
+                },
+            })
+            expectStatus(staleCall, 200, 'stale webhook should be accepted (200) but not applied')
+
+            state.cleanup.webhookEventIds.add(staleEventId)
+            state.cleanup.invoiceProviderIds.add(`in_stale_${ctx.runId}_${seq}`)
+
+            // Step 3: Verify status is still active — the stale event should not have regressed it
+            const finalStatus = await getSubscriptionStatus(ctx, fixture.subscriptionId)
+            assert(finalStatus === 'active', `Expected status to remain active after stale event, got ${finalStatus ?? 'null'}`)
+
+            state.dbBeforeAfterKeys.after = [
+                `subscription:${fixture.subscriptionId}:ordering_guard_held`,
+            ]
         },
     },
 ]

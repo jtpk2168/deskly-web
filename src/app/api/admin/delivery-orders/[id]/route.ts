@@ -355,6 +355,28 @@ async function applyDeliveredSideEffects(subscriptionId: string, currentFulfillm
     }
 }
 
+async function logDeliveryOrderEvent(
+    deliveryOrderId: string,
+    fromStatus: string | null,
+    toStatus: string,
+    fields: { failure_reason?: string | null; rescheduled_at?: string | null; cancelled_reason?: string | null },
+) {
+    try {
+        await supabaseServer
+            .from('delivery_order_events')
+            .insert({
+                delivery_order_id: deliveryOrderId,
+                from_status: fromStatus,
+                to_status: toStatus,
+                failure_reason: fields.failure_reason ?? null,
+                rescheduled_at: fields.rescheduled_at ?? null,
+                cancelled_reason: fields.cancelled_reason ?? null,
+            })
+    } catch {
+        // Audit logging must not block the transition itself.
+    }
+}
+
 /** GET /api/admin/delivery-orders/:id — Get one delivery order for admin */
 export async function GET(_request: NextRequest, { params }: RouteParams) {
     try {
@@ -433,7 +455,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
             }
         }
 
-        const { error: updateError } = await supabaseServer
+        const { data: updatedRow, error: updateError } = await supabaseServer
             .from('delivery_orders')
             .update({
                 do_status: nextStatus,
@@ -442,10 +464,41 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
                 cancelled_reason: nextStatus === 'cancelled' ? cancelledReason : null,
             })
             .eq('id', uuid)
+            .eq('do_status', currentStatus)
+            .select('id')
+            .maybeSingle()
 
         if (updateError) return errorResponse(updateError.message, 500)
 
-        if (nextStatus === 'delivered' || nextStatus === 'partially_delivered') {
+        let wonTransition = true
+        if (!updatedRow) {
+            // Another request may have already applied this transition — check if the row
+            // now holds the target status (idempotent) or a different one (real conflict).
+            const { data: recheckData } = await supabaseServer
+                .from('delivery_orders')
+                .select('do_status')
+                .eq('id', uuid)
+                .maybeSingle()
+            const recheckStatus = (recheckData as { do_status: string } | null)?.do_status?.toLowerCase()
+            if (recheckStatus !== nextStatus) {
+                return errorResponse(`Invalid transition: ${currentStatus} -> ${nextStatus} (concurrent modification)`, 409)
+            }
+            wonTransition = false
+        }
+
+        // Audit trail: log every successful transition (only for the request that won the CAS).
+        if (wonTransition) {
+            await logDeliveryOrderEvent(uuid, currentStatus, nextStatus, {
+                failure_reason: nextStatus === 'failed' ? failureReason : null,
+                rescheduled_at: nextStatus === 'rescheduled' ? rescheduledAt : null,
+                cancelled_reason: nextStatus === 'cancelled' ? cancelledReason : null,
+            })
+        }
+
+        // Side effects run for the winning request. The race loser skips them because
+        // the winner already applied them (applyDeliveredSideEffects is idempotent on
+        // first_delivery_at, and service_state preserves terminal states).
+        if (wonTransition && (nextStatus === 'delivered' || nextStatus === 'partially_delivered')) {
             await applyDeliveredSideEffects(currentOrder.subscription_id, dispatchContext.fulfillment)
         }
 

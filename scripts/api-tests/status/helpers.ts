@@ -482,6 +482,22 @@ export async function cleanupScenario(ctx: ScenarioContext, state: ScenarioState
     }
 
     if (subscriptionIds.length > 0) {
+        // Clean delivery_order_events via delivery_order IDs first (before deleting delivery_orders).
+        for (const subId of subscriptionIds) {
+            const { data: doRows } = await supabase
+                .from('delivery_orders')
+                .select('id')
+                .eq('subscription_id', subId)
+            const doIds = (doRows ?? []).map((row) => String((row as { id: string }).id))
+            if (doIds.length > 0) {
+                const { error: doEventsError } = await supabase
+                    .from('delivery_order_events')
+                    .delete()
+                    .in('delivery_order_id', doIds)
+                if (doEventsError) errors.push(`cleanup delivery_order_events: ${doEventsError.message}`)
+            }
+        }
+
         const tablesBySubscriptionId = [
             'subscription_fulfillment_events',
             'billing_invoices',
@@ -534,6 +550,58 @@ export async function cleanupScenario(ctx: ScenarioContext, state: ScenarioState
     }
 
     return errors
+}
+
+export async function getFulfillmentEvents(ctx: ScenarioContext, subscriptionId: string) {
+    const supabase = createServiceRoleClient(ctx)
+    const { data, error } = await supabase
+        .from('subscription_fulfillment_events')
+        .select('id, action, from_service_state, to_service_state, from_collection_status, to_collection_status, note, actor_label, created_at')
+        .eq('subscription_id', subscriptionId)
+        .order('created_at', { ascending: true })
+    throwIfError(error, 'load fulfillment events')
+    return (data ?? []) as Array<{
+        id: string
+        action: string
+        from_service_state: string | null
+        to_service_state: string | null
+        from_collection_status: string | null
+        to_collection_status: string | null
+        note: string | null
+        actor_label: string
+        created_at: string
+    }>
+}
+
+export async function getDeliveryOrderEvents(ctx: ScenarioContext, deliveryOrderId: string) {
+    const supabase = createServiceRoleClient(ctx)
+    const { data, error } = await supabase
+        .from('delivery_order_events')
+        .select('id, delivery_order_id, from_status, to_status, failure_reason, rescheduled_at, cancelled_reason, actor_label, created_at')
+        .eq('delivery_order_id', deliveryOrderId)
+        .order('created_at', { ascending: true })
+    throwIfError(error, 'load delivery order events')
+    return (data ?? []) as Array<{
+        id: string
+        delivery_order_id: string
+        from_status: string | null
+        to_status: string
+        failure_reason: string | null
+        rescheduled_at: string | null
+        cancelled_reason: string | null
+        actor_label: string
+        created_at: string
+    }>
+}
+
+export async function getInvoiceCountBySubscription(ctx: ScenarioContext, subscriptionId: string) {
+    const supabase = createServiceRoleClient(ctx)
+    const { count, error } = await supabase
+        .from('billing_invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('subscription_id', subscriptionId)
+    throwIfError(error, 'count invoices by subscription')
+    return count ?? 0
 }
 
 export async function createFixture(ctx: ScenarioContext, state: ScenarioState, label: string): Promise<ScenarioFixture> {
