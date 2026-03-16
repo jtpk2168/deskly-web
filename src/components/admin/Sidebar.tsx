@@ -1,7 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
+import { createBrowserClient } from '@supabase/ssr'
 import {
     LayoutDashboard,
     Package,
@@ -33,6 +34,16 @@ function isItemActive(pathname: string, href: string) {
 
 export function Sidebar() {
     const pathname = usePathname()
+    const router = useRouter()
+
+    const handleLogout = async () => {
+        const supabase = createBrowserClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        )
+        await supabase.auth.signOut()
+        router.push('/login')
+    }
 
     return (
         <aside className="relative flex h-screen w-72 shrink-0 flex-col border-r border-slate-200 bg-white">
@@ -82,7 +93,7 @@ export function Sidebar() {
             </nav>
 
             <div className="relative border-t border-slate-200 p-4">
-                <button className="flex w-full items-center gap-3 rounded-xl border border-red-200 bg-red-50/60 px-3 py-2.5 text-sm font-medium text-red-700 transition hover:bg-red-100">
+                <button onClick={handleLogout} className="flex w-full items-center gap-3 rounded-xl border border-red-200 bg-red-50/60 px-3 py-2.5 text-sm font-medium text-red-700 transition hover:bg-red-100">
                     <LogOut className="h-4 w-4" />
                     Logout
                 </button>
