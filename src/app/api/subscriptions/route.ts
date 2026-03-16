@@ -3,6 +3,7 @@ import { BILLING_MINIMUM_TERM_MONTHS } from '@/lib/billing/config'
 import { resolveUniformItemDuration } from '@/lib/billing/validation'
 import { supabaseServer } from '../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../lib/apiResponse'
+import { requireAuth } from '../../../../lib/apiAuth'
 import { normalizeBillingStatus } from '@/lib/billing/types'
 
 type SubscriptionItemInput = {
@@ -185,6 +186,9 @@ function getMissingProfileFields(
 
 /** GET /api/subscriptions?user_id= — List user's subscriptions */
 export async function GET(request: NextRequest) {
+    const auth = await requireAuth(request)
+    if (!auth.authenticated) return auth.response
+
     try {
         const { searchParams } = new URL(request.url)
         const userId = searchParams.get('user_id')
@@ -193,6 +197,10 @@ export async function GET(request: NextRequest) {
 
         const uuid = parseUUID(userId)
         if (!uuid) return errorResponse('Invalid user_id format', 400)
+
+        if (uuid !== auth.userId && auth.role !== 'admin') {
+            return errorResponse('You can only view your own subscriptions', 403)
+        }
 
         const { data, error } = await supabaseServer
             .from('subscriptions')
@@ -213,6 +221,9 @@ export async function GET(request: NextRequest) {
 
 /** POST /api/subscriptions — Create a subscription (checkout flow) */
 export async function POST(request: NextRequest) {
+    const auth = await requireAuth(request)
+    if (!auth.authenticated) return auth.response
+
     try {
         const body = await request.json()
         const {

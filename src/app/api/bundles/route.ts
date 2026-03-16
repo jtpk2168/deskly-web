@@ -1,8 +1,9 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../lib/supabaseServer'
 import { successResponse, errorResponse } from '../../../../lib/apiResponse'
+import { requireAdmin } from '../../../../lib/apiAuth'
 
-/** GET /api/bundles — List all active bundles */
+/** GET /api/bundles — List all active bundles (public catalog) */
 export async function GET() {
     try {
         const { data, error } = await supabaseServer
@@ -18,8 +19,11 @@ export async function GET() {
     }
 }
 
-/** POST /api/bundles — Create a new bundle */
+/** POST /api/bundles — Create a new bundle (admin only) */
 export async function POST(request: NextRequest) {
+    const auth = await requireAdmin(request)
+    if (!auth.authenticated) return auth.response
+
     try {
         const body = await request.json()
 

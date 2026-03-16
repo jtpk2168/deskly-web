@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server'
+import { requireAuth } from '../../../../../lib/apiAuth'
 import { createHash } from 'node:crypto'
 import {
     BILLING_CHECKOUT_CANCEL_URL,
@@ -298,12 +299,20 @@ function getMissingDeliverySnapshotFields(delivery: DeliverySnapshotRecord) {
 
 /** POST /api/billing/checkout — Creates an internal subscription record and provider checkout session */
 export async function POST(request: NextRequest) {
+    const auth = await requireAuth(request)
+    if (!auth.authenticated) return auth.response
+
     try {
         const rawBody = await request.json()
         const body = (rawBody ?? {}) as BillingCheckoutRequest
         const userUuid = parseUUID(body.user_id)
 
         if (!userUuid) return errorResponse('Invalid or missing user_id', 400)
+
+        // Users can only create checkouts for themselves unless admin
+        if (userUuid !== auth.userId && auth.role !== 'admin') {
+            return errorResponse('You can only create checkouts for your own account', 403)
+        }
 
         const bundleUuid = body.bundle_id == null || body.bundle_id === ''
             ? null

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../../lib/apiResponse'
+import { requireAuth } from '../../../../../lib/apiAuth'
 import { normalizeBillingStatus } from '@/lib/billing/types'
 import { BILLING_FIELDS_READONLY_ERROR, hasLockedBillingFieldEdits } from '@/lib/billing/manualEditGuard'
 
@@ -57,7 +58,10 @@ function unwrapSingle<T>(value: T | T[] | null | undefined): T | null {
 }
 
 /** GET /api/subscriptions/:id — Get subscription details */
-export async function GET(_request: NextRequest, { params }: RouteParams) {
+export async function GET(request: NextRequest, { params }: RouteParams) {
+    const auth = await requireAuth(request)
+    if (!auth.authenticated) return auth.response
+
     try {
         const { id } = await params
         const uuid = parseUUID(id)
@@ -170,6 +174,9 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
 
 /** PATCH /api/subscriptions/:id — Billing fields are Stripe-managed and cannot be edited manually */
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
+    const auth = await requireAuth(request)
+    if (!auth.authenticated) return auth.response
+
     try {
         const { id } = await params
         const uuid = parseUUID(id)

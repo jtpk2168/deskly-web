@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../../lib/apiResponse'
+import { requireAdmin } from '../../../../../lib/apiAuth'
 
 type RouteParams = { params: Promise<{ id: string }> }
 
@@ -24,8 +25,11 @@ export async function GET(_request: NextRequest, { params }: RouteParams) {
     }
 }
 
-/** PATCH /api/bundles/:id — Update a bundle */
+/** PATCH /api/bundles/:id — Update a bundle (admin only) */
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
+    const auth = await requireAdmin(request)
+    if (!auth.authenticated) return auth.response
+
     try {
         const { id } = await params
         const uuid = parseUUID(id)
@@ -47,8 +51,11 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     }
 }
 
-/** DELETE /api/bundles/:id — Soft-delete a bundle */
-export async function DELETE(_request: NextRequest, { params }: RouteParams) {
+/** DELETE /api/bundles/:id — Soft-delete a bundle (admin only) */
+export async function DELETE(request: NextRequest, { params }: RouteParams) {
+    const auth = await requireAdmin(request)
+    if (!auth.authenticated) return auth.response
+
     try {
         const { id } = await params
         const uuid = parseUUID(id)
