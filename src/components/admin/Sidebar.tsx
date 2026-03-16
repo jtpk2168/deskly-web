@@ -23,6 +23,7 @@ const menuItems = [
     { name: 'Customers', href: '/admin/customers', icon: Users },
     { name: 'Admins', href: '/admin/admins', icon: Shield },
     { name: 'Settings', href: '/admin/settings', icon: Settings },
+    { name: 'Test Simulator', href: '/admin/simulator', icon: Package },
 ]
 
 function isItemActive(pathname: string, href: string) {
