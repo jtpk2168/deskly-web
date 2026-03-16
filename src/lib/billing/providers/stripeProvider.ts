@@ -146,6 +146,14 @@ export class StripeBillingProvider implements BillingProvider {
         params.set('automatic_tax[enabled]', input.automaticTax ? 'true' : 'false')
         params.set('subscription_data[metadata][minimum_term_months]', String(input.minimumTermMonths))
 
+        // Anchor all subscriptions to the 1st of next month.
+        // Stripe will prorate the first partial period automatically.
+        const anchorDate = new Date()
+        anchorDate.setUTCMonth(anchorDate.getUTCMonth() + 1, 1)
+        anchorDate.setUTCHours(0, 0, 0, 0)
+        params.set('subscription_data[billing_cycle_anchor]', String(Math.floor(anchorDate.getTime() / 1000)))
+        params.set('subscription_data[proration_behavior]', 'create_prorations')
+
         input.lineItems.forEach((lineItem, index) => {
             params.set(`line_items[${index}][quantity]`, String(lineItem.quantity))
             if (!input.automaticTax && input.manualTaxRateId) {
