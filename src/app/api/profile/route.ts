@@ -1,14 +1,23 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../lib/apiResponse'
+import { requireAuth } from '../../../../lib/apiAuth'
 
 /** GET /api/profile?user_id= — Get profile + company info */
 export async function GET(request: NextRequest) {
     try {
+        const auth = await requireAuth(request)
+        if (!auth.authenticated) return auth.response
+
         const { searchParams } = new URL(request.url)
         const userId = searchParams.get('user_id')
 
         if (!userId) return errorResponse('user_id query parameter is required', 400)
+
+        // Users can only read their own profile unless they are admin
+        if (userId !== auth.userId && auth.role !== 'admin') {
+            return errorResponse('You can only access your own profile', 403)
+        }
 
         const uuid = parseUUID(userId)
         if (!uuid) return errorResponse('Invalid user_id format', 400)
@@ -38,10 +47,18 @@ export async function GET(request: NextRequest) {
 /** POST /api/profile — Create/update profile during onboarding (upsert) */
 export async function POST(request: NextRequest) {
     try {
+        const auth = await requireAuth(request)
+        if (!auth.authenticated) return auth.response
+
         const body = await request.json()
         const { user_id, full_name, job_title, phone_number, marketing_consent, company } = body
 
         if (!user_id) return errorResponse('user_id is required', 400)
+
+        // Users can only write their own profile unless they are admin
+        if (user_id !== auth.userId && auth.role !== 'admin') {
+            return errorResponse('You can only modify your own profile', 403)
+        }
 
         const uuid = parseUUID(user_id)
         if (!uuid) return errorResponse('Invalid user_id format', 400)
@@ -123,10 +140,17 @@ export async function POST(request: NextRequest) {
 /** PATCH /api/profile — Partial update (from edit profile screen) */
 export async function PATCH(request: NextRequest) {
     try {
+        const auth = await requireAuth(request)
+        if (!auth.authenticated) return auth.response
+
         const body = await request.json()
         const { user_id, ...updates } = body
 
         if (!user_id) return errorResponse('user_id is required', 400)
+
+        if (user_id !== auth.userId && auth.role !== 'admin') {
+            return errorResponse('You can only modify your own profile', 403)
+        }
 
         const uuid = parseUUID(user_id)
         if (!uuid) return errorResponse('Invalid user_id format', 400)

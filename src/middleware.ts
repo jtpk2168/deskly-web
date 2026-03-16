@@ -10,8 +10,10 @@ export async function middleware(request: NextRequest) {
         return NextResponse.next();
     }
 
-    // Only protect /admin routes
-    if (!request.nextUrl.pathname.startsWith('/admin')) {
+    // Protect /admin pages and /api/admin/* API routes
+    const isAdminPage = request.nextUrl.pathname.startsWith('/admin')
+    const isAdminApi = request.nextUrl.pathname.startsWith('/api/admin')
+    if (!isAdminPage && !isAdminApi) {
         return NextResponse.next();
     }
 
@@ -50,6 +52,9 @@ export async function middleware(request: NextRequest) {
 
     // 1. Check if user is logged in
     if (!user) {
+        if (isAdminApi) {
+            return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+        }
         return NextResponse.redirect(new URL('/login', request.url));
     }
 
@@ -57,7 +62,10 @@ export async function middleware(request: NextRequest) {
     const role = user.app_metadata?.role;
 
     if (role !== 'admin') {
-        // Redirect non-admins to home page or show 403
+        // API routes return 403 JSON, pages redirect
+        if (isAdminApi) {
+            return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+        }
         return NextResponse.redirect(new URL('/', request.url));
     }
 
@@ -66,9 +74,7 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
     matcher: [
-        /*
-         * Match all request paths starting with /admin
-         */
         '/admin/:path*',
+        '/api/admin/:path*',
     ],
 };

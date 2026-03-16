@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../../../lib/supabaseServer'
 import { successResponse, errorResponse, parseUUID } from '../../../../../../lib/apiResponse'
+import { rejectInProduction } from '../../../../../../lib/devOnly'
 
 /**
  * GET /api/admin/simulator/state?subscription_id=...&delivery_order_id=...
@@ -9,6 +10,9 @@ import { successResponse, errorResponse, parseUUID } from '../../../../../../lib
  * status, fulfillment service/collection state, and recent event history.
  */
 export async function GET(request: NextRequest) {
+    const blocked = rejectInProduction()
+    if (blocked) return blocked
+
     try {
         const url = new URL(request.url)
         const subscriptionId = parseUUID(url.searchParams.get('subscription_id') ?? '')

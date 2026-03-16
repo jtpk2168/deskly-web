@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../../../lib/supabaseServer'
 import { successResponse, errorResponse } from '../../../../../../lib/apiResponse'
+import { rejectInProduction } from '../../../../../../lib/devOnly'
 
 /**
  * POST /api/admin/simulator/scaffold
@@ -11,6 +12,9 @@ import { successResponse, errorResponse } from '../../../../../../lib/apiRespons
  * webhook so the fixture is immediately ready for delivery testing.
  */
 export async function POST(_request: NextRequest) {
+    const blocked = rejectInProduction()
+    if (blocked) return blocked
+
     try {
         const label = `sim_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
         const email = `apitest+${label}@deskly.local`

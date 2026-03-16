@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../lib/supabaseServer'
 import { errorResponse, successResponse } from '../../../../lib/apiResponse'
+import { requireAdmin } from '../../../../lib/apiAuth'
 import { fetchAllAuthUsers } from '@/lib/authAdminUsers'
 import { paginateArray, parsePaginationParams } from '@/lib/pagination'
 
@@ -50,6 +51,9 @@ function toCustomerRecord(user: AuthCustomerUser, profile: ProfileRecord | undef
 /** GET /api/customers — List all CUSTOMER users */
 export async function GET(request: NextRequest) {
     try {
+        const auth = await requireAdmin(request)
+        if (!auth.authenticated) return auth.response
+
         const { searchParams } = new URL(request.url)
         const { page, limit } = parsePaginationParams(searchParams)
 
@@ -80,6 +84,9 @@ export async function GET(request: NextRequest) {
 /** DELETE /api/customers?id=... — Delete a customer */
 export async function DELETE(request: NextRequest) {
     try {
+        const auth = await requireAdmin(request)
+        if (!auth.authenticated) return auth.response
+
         const { searchParams } = new URL(request.url)
         const id = searchParams.get('id')
         if (!id) return errorResponse('Customer ID is required', 400)

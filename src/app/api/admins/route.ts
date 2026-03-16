@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../lib/supabaseServer'
 import { errorResponse, successResponse } from '../../../../lib/apiResponse'
+import { requireAdmin } from '../../../../lib/apiAuth'
 import { fetchAllAuthUsers } from '@/lib/authAdminUsers'
 import { paginateArray, parsePaginationParams } from '@/lib/pagination'
 
@@ -92,6 +93,9 @@ async function upsertAdminProfile(userId: string, fullName: string) {
 /** GET /api/admins — List all ADMIN users */
 export async function GET(request: NextRequest) {
     try {
+        const auth = await requireAdmin(request)
+        if (!auth.authenticated) return auth.response
+
         const { searchParams } = new URL(request.url)
         const { page, limit } = parsePaginationParams(searchParams)
 
@@ -122,6 +126,9 @@ export async function GET(request: NextRequest) {
 /** POST /api/admins — Create a new admin */
 export async function POST(request: NextRequest) {
     try {
+        const auth = await requireAdmin(request)
+        if (!auth.authenticated) return auth.response
+
         const body = await parseBody(request)
         const name = normalizeString(body?.name)
         const email = normalizeEmail(body?.email)
@@ -164,6 +171,9 @@ export async function POST(request: NextRequest) {
 /** PATCH /api/admins?id=... — Update an admin (Protects Super Admin) */
 export async function PATCH(request: NextRequest) {
     try {
+        const auth = await requireAdmin(request)
+        if (!auth.authenticated) return auth.response
+
         const { searchParams } = new URL(request.url)
         const id = searchParams.get('id')?.trim()
         if (!id) return errorResponse('Admin ID is required', 400)
@@ -212,6 +222,9 @@ export async function PATCH(request: NextRequest) {
 /** DELETE /api/admins?id=... — Delete an admin (Protects Super Admin) */
 export async function DELETE(request: NextRequest) {
     try {
+        const auth = await requireAdmin(request)
+        if (!auth.authenticated) return auth.response
+
         const { searchParams } = new URL(request.url)
         const id = searchParams.get('id')
         if (!id) return errorResponse('Admin ID is required', 400)

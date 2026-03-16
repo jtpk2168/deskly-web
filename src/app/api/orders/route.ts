@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { supabaseServer } from '../../../../lib/supabaseServer'
 import { successResponse, errorResponse } from '../../../../lib/apiResponse'
+import { requireAdmin } from '../../../../lib/apiAuth'
 import { parsePaginationParams } from '@/lib/pagination'
 import { normalizeBillingStatus } from '@/lib/billing/types'
 
@@ -16,7 +17,9 @@ type OrderRecord = {
 /** GET /api/orders — List all subscriptions (orders) for admin */
 export async function GET(request: NextRequest) {
     try {
-        // In a real app, verify admin role here
+        const auth = await requireAdmin(request)
+        if (!auth.authenticated) return auth.response
+
         const { searchParams } = new URL(request.url)
         const { page, limit, from, to } = parsePaginationParams(searchParams)
 
@@ -36,7 +39,6 @@ export async function GET(request: NextRequest) {
             .range(from, to)
 
         if (error) {
-            console.error('Supabase Error (Orders):', error);
             return errorResponse(error.message, 500)
         }
 
@@ -55,8 +57,7 @@ export async function GET(request: NextRequest) {
             limit,
             total: count ?? 0,
         })
-    } catch (err) {
-        console.error('API Error (Orders):', err);
+    } catch {
         return errorResponse('Internal server error', 500)
     }
 }

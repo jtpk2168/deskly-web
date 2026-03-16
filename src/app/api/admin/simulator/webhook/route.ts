@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { NextRequest } from 'next/server'
 import { successResponse, errorResponse } from '../../../../../../lib/apiResponse'
+import { rejectInProduction } from '../../../../../../lib/devOnly'
 
 const SUPPORTED_EVENTS = [
     'invoice.paid',
@@ -23,6 +24,9 @@ function isSupportedEvent(value: unknown): value is SupportedEvent {
  * webhook secret to the client while exercising the real processing pipeline.
  */
 export async function POST(request: NextRequest) {
+    const blocked = rejectInProduction()
+    if (blocked) return blocked
+
     try {
         const body = await request.json()
         const eventType = body?.event_type

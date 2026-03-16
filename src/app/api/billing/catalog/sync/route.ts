@@ -3,6 +3,7 @@ import { BILLING_DEFAULT_CURRENCY } from '@/lib/billing/config'
 import { getBillingProvider } from '@/lib/billing/providers'
 import { parseUUID } from '@/lib/billing/validation'
 import { errorResponse, successResponse } from '../../../../../../lib/apiResponse'
+import { requireAdmin } from '../../../../../../lib/apiAuth'
 import { supabaseServer } from '../../../../../../lib/supabaseServer'
 
 type ProductRow = {
@@ -54,6 +55,9 @@ function normalizeProductIds(input: unknown) {
 
 /** POST /api/billing/catalog/sync — Sync internal products into billing provider products/prices */
 export async function POST(request: NextRequest) {
+    const auth = await requireAdmin(request)
+    if (!auth.authenticated) return auth.response
+
     try {
         const body = (await request.json().catch(() => ({}))) as CatalogSyncBody
         const billingProvider = getBillingProvider()
