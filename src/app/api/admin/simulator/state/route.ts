@@ -47,14 +47,15 @@ export async function GET(request: NextRequest) {
         }
 
         // Load subscription
-        let subscription: {
+        type SubscriptionSnapshot = {
             id: string
             status: string | null
             monthly_total: number | null
             start_date: string | null
             end_date: string | null
             last_provider_event_at: string | null
-        } | null = null
+        }
+        let subscription: SubscriptionSnapshot | null = null
 
         if (resolvedSubscriptionId) {
             const { data } = await supabaseServer
@@ -62,11 +63,11 @@ export async function GET(request: NextRequest) {
                 .select('id, status, monthly_total, start_date, end_date, last_provider_event_at')
                 .eq('id', resolvedSubscriptionId)
                 .maybeSingle()
-            subscription = data as typeof subscription
+            subscription = data as SubscriptionSnapshot | null
         }
 
         // Load delivery order
-        let deliveryOrder: {
+        type DeliveryOrderSnapshot = {
             id: string
             do_status: string
             failure_reason: string | null
@@ -74,7 +75,8 @@ export async function GET(request: NextRequest) {
             cancelled_reason: string | null
             created_at: string
             updated_at: string
-        } | null = null
+        }
+        let deliveryOrder: DeliveryOrderSnapshot | null = null
 
         if (resolvedDeliveryOrderId) {
             const { data } = await supabaseServer
@@ -82,15 +84,16 @@ export async function GET(request: NextRequest) {
                 .select('id, do_status, failure_reason, rescheduled_at, cancelled_reason, created_at, updated_at')
                 .eq('id', resolvedDeliveryOrderId)
                 .maybeSingle()
-            deliveryOrder = data as typeof deliveryOrder
+            deliveryOrder = data as DeliveryOrderSnapshot | null
         }
 
         // Load fulfillment
-        let fulfillment: {
+        type FulfillmentSnapshot = {
             service_state: string
             collection_status: string
             first_delivery_at: string | null
-        } | null = null
+        }
+        let fulfillment: FulfillmentSnapshot | null = null
 
         if (resolvedSubscriptionId) {
             const { data } = await supabaseServer
@@ -98,7 +101,7 @@ export async function GET(request: NextRequest) {
                 .select('service_state, collection_status, first_delivery_at')
                 .eq('subscription_id', resolvedSubscriptionId)
                 .maybeSingle()
-            fulfillment = data as typeof fulfillment
+            fulfillment = data as FulfillmentSnapshot | null
         }
 
         // Load recent DO events
