@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { errorResponse, successResponse } from '../../../../../../../lib/apiResponse'
+import { requireAdmin } from '../../../../../../../lib/apiAuth'
 import { supabaseServer } from '../../../../../../../lib/supabaseServer'
 
 export const runtime = 'nodejs'
@@ -239,6 +240,9 @@ function chunkArray<T>(items: T[], size: number) {
 
 /** POST /api/admin/billing/invoices/backfill — Pull historical Stripe invoices and mirror them locally */
 export async function POST(request: NextRequest) {
+    const auth = await requireAdmin(request)
+    if (!auth.authenticated) return auth.response
+
     try {
         const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
         const requestedLimit = parseBackfillLimit(body.limit)
