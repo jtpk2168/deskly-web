@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
 import { errorResponse } from './apiResponse'
 
@@ -7,10 +8,33 @@ type AuthResult =
     | { authenticated: false; response: ReturnType<typeof errorResponse> }
 
 /**
- * Verify that the request has a valid Supabase session via cookies.
- * Returns the authenticated user's ID and role, or an error response.
+ * Verify that the request has a valid Supabase session.
+ *
+ * Checks in order:
+ * 1. Authorization: Bearer <jwt> header  — used by mobile clients
+ * 2. Cookie-based session                — used by the admin web dashboard
+ *
+ * Returns the authenticated user's ID and role, or a 401 error response.
  */
 export async function requireAuth(request: NextRequest): Promise<AuthResult> {
+    // 1. Bearer token (mobile app sends Authorization: Bearer <access_token>)
+    const authHeader = request.headers.get('Authorization')
+    if (authHeader?.startsWith('Bearer ')) {
+        const token = authHeader.slice(7).trim()
+        if (token) {
+            const supabase = createClient(
+                process.env.NEXT_PUBLIC_SUPABASE_URL!,
+                process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+            )
+            const { data: { user }, error } = await supabase.auth.getUser(token)
+            if (!error && user) {
+                const role = (user.app_metadata?.role as string) ?? null
+                return { authenticated: true, userId: user.id, role }
+            }
+        }
+    }
+
+    // 2. Cookie-based session (admin web dashboard)
     const supabase = createServerClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
